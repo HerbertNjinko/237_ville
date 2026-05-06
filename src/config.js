@@ -25,11 +25,7 @@ export const config = {
     environment: String(process.env.DWOLLA_ENVIRONMENT || "sandbox").toLowerCase(),
     key: process.env.DWOLLA_KEY || "",
     secret: process.env.DWOLLA_SECRET || "",
-    companyFundingSourceUrl: process.env.DWOLLA_COMPANY_FUNDING_SOURCE_URL || "",
-    donorFundingSourceUrl:
-      process.env.DWOLLA_DONOR_FUNDING_SOURCE_URL ||
-      process.env.DWOLLA_SOURCE_FUNDING_SOURCE_URL ||
-      ""
+    companyFundingSourceUrl: process.env.DWOLLA_COMPANY_FUNDING_SOURCE_URL || ""
   },
   database:
     process.env.DATABASE_URL

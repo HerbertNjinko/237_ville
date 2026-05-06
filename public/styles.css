@@ -402,6 +402,27 @@ a {
   gap: 12px;
 }
 
+.payment-guide-list {
+  display: grid;
+  gap: 8px;
+}
+
+.payment-guide {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.payment-guide span,
+.payment-guide p {
+  margin: 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
 .item-card {
   padding: 14px;
 }

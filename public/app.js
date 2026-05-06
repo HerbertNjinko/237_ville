@@ -5,6 +5,7 @@ const state = {
   data: null,
   admin: null,
   adminNotifications: null,
+  publicPaymentDetails: null,
   adminPaymentFilter: "all",
   memberFilter: {
     scope: "all",
@@ -28,6 +29,7 @@ const memberViews = [
   ["votes", "Votes"],
   ["events", "Events"],
   ["questions", "Questions"],
+  ["financials", "Financials"],
   ["payments", "Dues and donations"],
   ["profile", "Profile"]
 ];
@@ -39,6 +41,8 @@ const adminViews = [
   ["events", "Events"],
   ["votes", "Votes"],
   ["payments", "Dues and donations"],
+  ["payment-details", "Payment details"],
+  ["expenditures", "Expenditures"],
   ["profile", "Members / Profile"],
   ["notifications", "Notifications"]
 ];
@@ -79,6 +83,28 @@ function formatMoney(cents = 0) {
     style: "currency",
     currency: "USD"
   }).format(Number(cents || 0) / 100);
+}
+
+const defaultPaymentDetails = [
+  { method: "cash", displayName: "Cash", accountIdentifier: "", instructions: "Enter the donor name and the person who received the cash.", enabled: true },
+  { method: "cash_app", displayName: "Cash App", accountIdentifier: "", instructions: "", enabled: true },
+  { method: "venmo", displayName: "Venmo", accountIdentifier: "", instructions: "", enabled: true },
+  { method: "zelle", displayName: "Zelle", accountIdentifier: "", instructions: "", enabled: true },
+  { method: "paypal", displayName: "PayPal", accountIdentifier: "", instructions: "", enabled: true },
+  { method: "bank_account", displayName: "Bank account / ACH review", accountIdentifier: "", instructions: "", enabled: true }
+];
+
+function availablePaymentDetails() {
+  return (state.data?.paymentDetails || state.publicPaymentDetails || defaultPaymentDetails).filter((detail) => detail.enabled !== false);
+}
+
+function allAdminPaymentDetails() {
+  return state.admin?.paymentDetails || defaultPaymentDetails;
+}
+
+function paymentMethodLabel(method) {
+  const detail = [...availablePaymentDetails(), ...allAdminPaymentDetails()].find((item) => item.method === method);
+  return detail?.displayName || String(method || "").replaceAll("_", " ");
 }
 
 function formatBytes(bytes = 0) {
@@ -162,6 +188,15 @@ async function loadMe() {
   }
 }
 
+async function loadPublicPaymentDetails() {
+  try {
+    const payload = await api("/api/payment-details");
+    state.publicPaymentDetails = payload.paymentDetails || defaultPaymentDetails;
+  } catch {
+    state.publicPaymentDetails = defaultPaymentDetails;
+  }
+}
+
 async function loadDashboard() {
   if (!state.user) return;
   const data = await api("/api/dashboard");
@@ -224,6 +259,89 @@ function render() {
   renderShell();
 }
 
+function renderPaymentMethodSelect(details = availablePaymentDetails()) {
+  return `
+    <label class="field">
+      <span>Payment method</span>
+      <select name="method" data-payment-method-select required>
+        ${details
+          .map((detail) => `<option value="${escapeHtml(detail.method)}">${escapeHtml(detail.displayName)}</option>`)
+          .join("")}
+      </select>
+    </label>
+  `;
+}
+
+function renderPaymentGuides(details = availablePaymentDetails()) {
+  if (!details.length) return emptyState("No payment methods are available.");
+  const selectedMethod = details[0]?.method || "";
+
+  return `
+    <div class="payment-guide-list" data-payment-guide-list>
+      ${details
+        .map(
+          (detail) => `
+            <article class="payment-guide" data-payment-guide="${escapeHtml(detail.method)}" ${detail.method === selectedMethod ? "" : "hidden"}>
+              <strong>${escapeHtml(detail.displayName)}</strong>
+              ${detail.accountIdentifier ? `<span>${escapeHtml(detail.accountIdentifier)}</span>` : ""}
+              ${detail.instructions ? `<p>${escapeHtml(detail.instructions)}</p>` : ""}
+            </article>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderPaymentRecordFields({ includeBank = true } = {}) {
+  return `
+    <label class="field">
+      <span>Payment reference or sender handle</span>
+      <input name="paymentReference">
+    </label>
+    <label class="field">
+      <span>Sender username or payment email</span>
+      <input name="payerHandle">
+    </label>
+    ${
+      includeBank
+        ? `<div class="form-grid">
+            <label class="field">
+              <span>Bank name</span>
+              <input name="bankName">
+            </label>
+            <label class="field">
+              <span>Account holder name</span>
+              <input name="accountHolderName">
+            </label>
+            <label class="field">
+              <span>Account type</span>
+              <select name="bankAccountType">
+                <option value="">Not a bank payment</option>
+                <option value="checking">Checking</option>
+                <option value="savings">Savings</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Account last 4</span>
+              <input name="accountLast4" inputmode="numeric" maxlength="4" pattern="[0-9]{0,4}">
+            </label>
+          </div>`
+        : ""
+    }
+    <div class="form-grid">
+      <label class="field">
+        <span>Cash donor name</span>
+        <input name="cashDonorName">
+      </label>
+      <label class="field">
+        <span>Cash received by</span>
+        <input name="cashReceivedBy">
+      </label>
+    </div>
+  `;
+}
+
 function renderAuth() {
   const isRegister = state.authMode === "register";
   const isDonate = state.authMode === "donate";
@@ -279,10 +397,9 @@ function renderAuth() {
                     <span>Donation amount</span>
                     <input name="amount" type="number" min="1" step="0.01" required>
                   </label>
-                  <label class="field">
-                    <span>Dwolla sandbox source URL</span>
-                    <input name="donorFundingSourceUrl" placeholder="https://api-sandbox.dwolla.com/funding-sources/...">
-                  </label>
+                  ${renderPaymentMethodSelect(availablePaymentDetails())}
+                  ${renderPaymentGuides(availablePaymentDetails())}
+                  ${renderPaymentRecordFields()}
                   <label class="field">
                     <span>Note</span>
                     <textarea name="note"></textarea>
@@ -439,16 +556,9 @@ function renderOnboardingStep(user, policy, feePayment, feeCents) {
           <span>Registration fee</span>
           <strong>${formatMoney(feeCents)}</strong>
         </div>
-        <label class="field">
-          <span>Payment method</span>
-          <select name="method">
-            <option value="offline">Offline</option>
-            <option value="cash">Cash</option>
-            <option value="check">Check</option>
-            <option value="zelle">Zelle</option>
-            <option value="mobile_money">Mobile money</option>
-          </select>
-        </label>
+        ${renderPaymentMethodSelect(availablePaymentDetails())}
+        ${renderPaymentGuides(availablePaymentDetails())}
+        ${renderPaymentRecordFields()}
         <label class="field">
           <span>Reference or note</span>
           <textarea name="note"></textarea>
@@ -517,6 +627,8 @@ function topbarSubtitle() {
       events: "Create and manage organization events.",
       votes: "Create ballots, open voting, close voting, and review aggregate results.",
       payments: "Track dues, donations, pending payments, and members who have not paid dues.",
+      "payment-details": "Update the payment handles and instructions shown during payment submission.",
+      expenditures: "Enter expenses and publish financial records for member transparency.",
       profile: "Update member and admin account details.",
       notifications: "Filter and export notification records for audit."
     };
@@ -529,6 +641,7 @@ function topbarSubtitle() {
     votes: "Open and closed issues, elections, and aggregate results.",
     events: "Upcoming community meetings, programs, and planned events.",
     questions: "Member questions approved for community discussion.",
+    financials: "Published donations and organization expenditures.",
     payments: "Record dues and donations for admin review.",
     profile: "Update your member account details.",
     admin: "Publish content, plan events, manage ballots, and review member activity.",
@@ -550,6 +663,10 @@ function renderView() {
         return renderAdminVotes();
       case "payments":
         return renderAdminPayments();
+      case "payment-details":
+        return renderAdminPaymentDetails();
+      case "expenditures":
+        return renderAdminExpenditures();
       case "profile":
         return renderAdminProfiles();
       case "notifications":
@@ -568,6 +685,8 @@ function renderView() {
       return renderEvents();
     case "questions":
       return renderQuestions();
+    case "financials":
+      return renderFinancials();
     case "payments":
       return renderPayments();
     case "profile":
@@ -668,6 +787,102 @@ function renderAnnouncementList(announcements) {
                 <span>${escapeHtml(announcement.category)}</span>
                 <span>${escapeHtml(announcement.authorName)}</span>
                 <span>${formatDate(announcement.publishedAt || announcement.createdAt)}</span>
+              </div>
+            </article>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderFinancials() {
+  const financials = state.data.financials || {
+    donations: [],
+    expenditures: [],
+    summary: { donationTotalCents: 0, expenditureTotalCents: 0, publishedNetCents: 0 }
+  };
+
+  return `
+    <section class="content-grid">
+      <div class="metric-grid">
+        <div class="metric"><span>Published donations</span><strong>${formatMoney(financials.summary.donationTotalCents)}</strong></div>
+        <div class="metric"><span>Published expenses</span><strong>${formatMoney(financials.summary.expenditureTotalCents)}</strong></div>
+        <div class="metric"><span>Published net</span><strong>${formatMoney(financials.summary.publishedNetCents)}</strong></div>
+        <div class="metric"><span>Records</span><strong>${(financials.donations || []).length + (financials.expenditures || []).length}</strong></div>
+      </div>
+      <section class="two-column">
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <h3>Published donations</h3>
+              <p>Donation records shared by the admin.</p>
+            </div>
+          </div>
+          ${renderPublishedDonationList(financials.donations || [])}
+        </div>
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <h3>Published expenditures</h3>
+              <p>Organization expenses shared by the admin.</p>
+            </div>
+          </div>
+          ${renderPublishedExpenditureList(financials.expenditures || [])}
+        </div>
+      </section>
+    </section>
+  `;
+}
+
+function renderPublishedDonationList(donations) {
+  if (!donations.length) return emptyState("No donation records have been published.");
+
+  return `
+    <div class="item-list">
+      ${donations
+        .map(
+          (donation) => `
+            <article class="item-card">
+              <div class="panel-header">
+                <div>
+                  <h4>${escapeHtml(donation.donorName || "Anonymous donor")}</h4>
+                  <p>${escapeHtml(donation.note || "")}</p>
+                </div>
+                <strong>${formatMoney(donation.amountCents)}</strong>
+              </div>
+              <div class="item-meta">
+                <span>Donation</span>
+                <span>${formatDate(donation.publishedAt || donation.createdAt)}</span>
+              </div>
+            </article>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderPublishedExpenditureList(expenditures) {
+  if (!expenditures.length) return emptyState("No expenditures have been published.");
+
+  return `
+    <div class="item-list">
+      ${expenditures
+        .map(
+          (expense) => `
+            <article class="item-card">
+              <div class="panel-header">
+                <div>
+                  <h4>${escapeHtml(expense.title)}</h4>
+                  <p>${escapeHtml(expense.note || "")}</p>
+                </div>
+                <strong>${formatMoney(expense.amountCents)}</strong>
+              </div>
+              <div class="item-meta">
+                ${expense.category ? `<span>${escapeHtml(expense.category)}</span>` : ""}
+                ${expense.vendor ? `<span>${escapeHtml(expense.vendor)}</span>` : ""}
+                <span>${formatDate(expense.expenseDate, { dateOnly: true })}</span>
               </div>
             </article>
           `
@@ -943,7 +1158,7 @@ function renderPayments() {
         <div class="panel-header">
           <div>
             <h3>Record payment</h3>
-            <p>Use this for dues, donations, or offline payment tracking.</p>
+            <p>Use this for dues, donations, or payment tracking.</p>
           </div>
         </div>
         <form class="form-stack" data-action="record-payment">
@@ -958,16 +1173,9 @@ function renderPayments() {
             <span>Amount</span>
             <input name="amount" type="number" min="1" step="0.01" required>
           </label>
-          <label class="field">
-            <span>Method</span>
-            <select name="method">
-              <option value="offline">Offline</option>
-              <option value="cash">Cash</option>
-              <option value="check">Check</option>
-              <option value="zelle">Zelle</option>
-              <option value="mobile_money">Mobile money</option>
-            </select>
-          </label>
+          ${renderPaymentMethodSelect(availablePaymentDetails())}
+          ${renderPaymentGuides(availablePaymentDetails())}
+          ${renderPaymentRecordFields()}
           <label class="field">
             <span>Reference or note</span>
             <textarea name="note"></textarea>
@@ -1005,10 +1213,29 @@ function renderPaymentTable(payments, adminMode) {
               const processorMeta = [payment.processorStatus, payment.dwollaTransferUrl || payment.externalReference]
                 .filter(Boolean)
                 .join(" | ");
-              const actionCell =
-                payment.status === "pending"
-                  ? `<button class="secondary-button" data-click="payment-status" data-payment-id="${payment.id}" data-status="received" type="button">Received</button>`
-                  : `<span class="muted">Finalized</span>`;
+              const submittedDetails = payment.paymentDetails || {};
+              const submittedMeta = [
+                submittedDetails.paymentReference ? `Ref: ${submittedDetails.paymentReference}` : "",
+                submittedDetails.payerHandle ? `Sender: ${submittedDetails.payerHandle}` : "",
+                submittedDetails.bankName ? `Bank: ${submittedDetails.bankName}` : "",
+                submittedDetails.accountLast4 ? `Last 4: ${submittedDetails.accountLast4}` : "",
+                submittedDetails.cashDonorName ? `Cash donor: ${submittedDetails.cashDonorName}` : "",
+                submittedDetails.cashReceivedBy ? `Received by: ${submittedDetails.cashReceivedBy}` : ""
+              ]
+                .filter(Boolean)
+                .join(" | ");
+              const actions = [];
+              if (payment.status === "pending") {
+                actions.push(`<button class="secondary-button" data-click="payment-status" data-payment-id="${payment.id}" data-status="received" type="button">Received</button>`);
+              }
+              if (payment.purpose === "donation" && payment.status === "received") {
+                actions.push(
+                  payment.publishedAt
+                    ? `<span class="muted">Published</span>`
+                    : `<button class="secondary-button" data-click="payment-publish" data-payment-id="${payment.id}" type="button">Publish</button>`
+                );
+              }
+              const actionCell = actions.length ? actions.join("") : `<span class="muted">Finalized</span>`;
 
               return `
                 <tr>
@@ -1016,8 +1243,10 @@ function renderPaymentTable(payments, adminMode) {
                   <td>${escapeHtml(payment.purpose)}</td>
                   <td>${formatMoney(payment.amountCents)}</td>
                   <td>
-                    ${escapeHtml(payment.method)}
+                    ${escapeHtml(paymentMethodLabel(payment.method))}
                     ${processorMeta ? `<br><span class="muted">${escapeHtml(processorMeta)}</span>` : ""}
+                    ${submittedMeta ? `<br><span class="muted">${escapeHtml(submittedMeta)}</span>` : ""}
+                    ${payment.paymentDetailSnapshot ? `<br><span class="muted">${escapeHtml(payment.paymentDetailSnapshot)}</span>` : ""}
                   </td>
                   <td>${statusPill(payment.status)}</td>
                   <td>${formatDate(payment.createdAt)}</td>
@@ -1112,6 +1341,14 @@ function requireAdminData(label = "Loading admin tools...") {
 function adminStats() {
   const members = state.admin?.members || [];
   const payments = state.admin?.payments || [];
+  const expenditures = state.admin?.expenditures || [];
+  const financialSummary = state.admin?.financialSummary || {
+    receivedTotalCents: 0,
+    donationTotalCents: 0,
+    pendingPaymentTotalCents: 0,
+    expenditureTotalCents: 0,
+    accountBalanceCents: 0
+  };
   const activeMembers = members.filter((member) => member.membershipStatus === "active");
   const pendingApprovals = members.filter((member) => member.membershipStatus === "pending_approval");
   const duesPaidIds = new Set(
@@ -1128,6 +1365,8 @@ function adminStats() {
   return {
     members,
     payments,
+    expenditures,
+    financialSummary,
     activeMembers,
     pendingApprovals,
     duesPaidIds,
@@ -1147,6 +1386,12 @@ function renderAdminOverview() {
 
   return `
     <section class="admin-section">
+      <div class="metric-grid">
+        <div class="metric"><span>Account balance</span><strong>${formatMoney(stats.financialSummary.accountBalanceCents)}</strong></div>
+        <div class="metric"><span>Total received</span><strong>${formatMoney(stats.financialSummary.receivedTotalCents)}</strong></div>
+        <div class="metric"><span>Total expenses</span><strong>${formatMoney(stats.financialSummary.expenditureTotalCents)}</strong></div>
+        <div class="metric"><span>Pending payments</span><strong>${formatMoney(stats.financialSummary.pendingPaymentTotalCents)}</strong></div>
+      </div>
       <div class="metric-grid">
         <div class="metric"><span>Total members</span><strong>${stats.members.length}</strong></div>
         <div class="metric"><span>Pending approvals</span><strong>${stats.pendingApprovals.length}</strong></div>
@@ -1544,6 +1789,191 @@ function renderAdminPayments() {
         ${renderPaymentTable(state.admin.payments || [], true)}
       </div>
     </section>
+  `;
+}
+
+function renderAdminPaymentDetails() {
+  const loading = requireAdminData("Loading payment details...");
+  if (loading) return loading;
+
+  return `
+    <section class="panel">
+      <div class="panel-header">
+        <div>
+          <h3>Organization payment details</h3>
+          <p>These details are shown to members and anonymous donors when they submit payment records.</p>
+        </div>
+      </div>
+      <div class="item-list">
+        ${allAdminPaymentDetails()
+          .map(
+            (detail) => `
+              <article class="item-card">
+                <form class="form-stack" data-action="update-payment-detail" data-method="${escapeHtml(detail.method)}">
+                  <div class="panel-header">
+                    <div>
+                      <h4>${escapeHtml(detail.displayName)}</h4>
+                      <p>${escapeHtml(detail.method)}</p>
+                    </div>
+                    ${statusPill(detail.enabled ? "active" : "inactive")}
+                  </div>
+                  <div class="form-grid">
+                    <label class="field">
+                      <span>Display name</span>
+                      <input name="displayName" value="${escapeHtml(detail.displayName)}" required>
+                    </label>
+                    <label class="field">
+                      <span>Payment handle or account</span>
+                      <input name="accountIdentifier" value="${escapeHtml(detail.accountIdentifier || "")}">
+                    </label>
+                  </div>
+                  <label class="field">
+                    <span>Payment guide</span>
+                    <textarea name="instructions">${escapeHtml(detail.instructions || "")}</textarea>
+                  </label>
+                  <label class="inline-label">
+                    <input name="enabled" type="checkbox" ${detail.enabled ? "checked" : ""}>
+                    <span>Enable this payment method</span>
+                  </label>
+                  <button class="primary-button" type="submit">Save payment detail</button>
+                </form>
+              </article>
+            `
+          )
+          .join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderAdminExpenditures() {
+  const loading = requireAdminData("Loading expenditures...");
+  if (loading) return loading;
+
+  const expenditures = state.admin.expenditures || [];
+  const summary = state.admin.financialSummary || {
+    expenditureTotalCents: 0,
+    publishedExpenditureTotalCents: 0,
+    accountBalanceCents: 0
+  };
+
+  return `
+    <section class="content-grid">
+      <div class="metric-grid">
+        <div class="metric"><span>Account balance</span><strong>${formatMoney(summary.accountBalanceCents)}</strong></div>
+        <div class="metric"><span>Total expenses</span><strong>${formatMoney(summary.expenditureTotalCents)}</strong></div>
+        <div class="metric"><span>Published expenses</span><strong>${formatMoney(summary.publishedExpenditureTotalCents)}</strong></div>
+        <div class="metric"><span>Expense records</span><strong>${expenditures.length}</strong></div>
+      </div>
+      <section class="two-column">
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <h3>Organization expenditures</h3>
+              <p>Entered expenses can be published for member visibility.</p>
+            </div>
+          </div>
+          ${renderExpenditureTable(expenditures)}
+        </div>
+        <aside class="panel">
+          <div class="panel-header">
+            <div>
+              <h3>Enter expense</h3>
+              <p>Record organization spending and choose whether to publish it now.</p>
+            </div>
+          </div>
+          ${renderExpenditureForm()}
+        </aside>
+      </section>
+    </section>
+  `;
+}
+
+function renderExpenditureForm() {
+  return `
+    <form class="form-stack" data-action="create-expenditure">
+      <label class="field">
+        <span>Expense title</span>
+        <input name="title" required>
+      </label>
+      <div class="form-grid">
+        <label class="field">
+          <span>Amount</span>
+          <input name="amount" type="number" min="0.01" step="0.01" required>
+        </label>
+        <label class="field">
+          <span>Expense date</span>
+          <input name="expenseDate" type="date">
+        </label>
+      </div>
+      <div class="form-grid">
+        <label class="field">
+          <span>Category</span>
+          <input name="category" placeholder="Venue, supplies, outreach">
+        </label>
+        <label class="field">
+          <span>Vendor</span>
+          <input name="vendor">
+        </label>
+      </div>
+      <label class="field">
+        <span>Notes</span>
+        <textarea name="note"></textarea>
+      </label>
+      <label class="field">
+        <span>Visibility</span>
+        <select name="status">
+          <option value="draft">Admin only</option>
+          <option value="published">Publish to members</option>
+        </select>
+      </label>
+      <button class="primary-button" type="submit">Save expense</button>
+    </form>
+  `;
+}
+
+function renderExpenditureTable(expenditures) {
+  if (!expenditures.length) return emptyState("No expenditures have been entered.");
+
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Expense</th>
+            <th>Amount</th>
+            <th>Date</th>
+            <th>Status</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${expenditures
+            .map(
+              (expense) => `
+                <tr>
+                  <td>
+                    ${escapeHtml(expense.title)}
+                    <br><span class="muted">${escapeHtml([expense.category, expense.vendor].filter(Boolean).join(" | "))}</span>
+                    ${expense.note ? `<br><span class="muted">${escapeHtml(expense.note)}</span>` : ""}
+                  </td>
+                  <td>${formatMoney(expense.amountCents)}</td>
+                  <td>${formatDate(expense.expenseDate, { dateOnly: true })}</td>
+                  <td>${statusPill(expense.status)}</td>
+                  <td>
+                    ${
+                      expense.status === "published"
+                        ? `<span class="muted">Published</span>`
+                        : `<button class="secondary-button" data-click="expenditure-publish" data-expenditure-id="${expense.id}" type="button">Publish</button>`
+                    }
+                  </td>
+                </tr>
+              `
+            )
+            .join("")}
+        </tbody>
+      </table>
+    </div>
   `;
 }
 
@@ -2173,6 +2603,30 @@ async function handleSubmit(event) {
       return;
     }
 
+    if (action === "create-expenditure") {
+      await api("/api/admin/expenditures", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      form.reset();
+      state.message = payload.status === "published" ? "Expense saved and published." : "Expense saved.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
+    if (action === "update-payment-detail") {
+      payload.enabled = Boolean(form.elements.enabled?.checked);
+      await api(`/api/admin/payment-details/${form.dataset.method}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload)
+      });
+      state.message = "Payment detail saved.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
     if (action === "create-ballot") {
       await api("/api/admin/ballots", {
         method: "POST",
@@ -2302,6 +2756,7 @@ async function handleClick(event) {
       state.data = null;
       state.admin = null;
       state.adminNotifications = null;
+      await loadPublicPaymentDetails();
       state.message = "";
       state.messageType = "";
       render();
@@ -2444,6 +2899,28 @@ async function handleClick(event) {
       return;
     }
 
+    if (action === "payment-publish") {
+      await api(`/api/admin/payments/${button.dataset.paymentId}/publish`, {
+        method: "POST",
+        body: "{}"
+      });
+      state.message = "Donation published for members.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
+    if (action === "expenditure-publish") {
+      await api(`/api/admin/expenditures/${button.dataset.expenditureId}/publish`, {
+        method: "POST",
+        body: "{}"
+      });
+      state.message = "Expenditure published for members.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
     if (action === "payment-status") {
       await api(`/api/admin/payments/${button.dataset.paymentId}/status`, {
         method: "PATCH",
@@ -2460,11 +2937,30 @@ async function handleClick(event) {
   }
 }
 
+function updatePaymentGuideVisibility(select) {
+  const form = select.closest("form");
+  const guideList = form?.querySelector("[data-payment-guide-list]");
+  if (!guideList) return;
+
+  for (const guide of guideList.querySelectorAll("[data-payment-guide]")) {
+    guide.hidden = guide.dataset.paymentGuide !== select.value;
+  }
+}
+
+function handleChange(event) {
+  const select = event.target.closest("[data-payment-method-select]");
+  if (!select) return;
+  updatePaymentGuideVisibility(select);
+}
+
 document.addEventListener("submit", handleSubmit);
+document.addEventListener("change", handleChange);
 document.addEventListener("click", handleClick);
 
 await loadMe();
 if (state.user) {
   await loadDashboard();
+} else {
+  await loadPublicPaymentDetails();
 }
 render();

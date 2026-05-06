@@ -1,7 +1,6 @@
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { createReadStream } from "node:fs";
-import { randomUUID } from "node:crypto";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
@@ -21,6 +20,7 @@ import { bootstrapDefaultAdmin, runSchemaMigration } from "./setup.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const publicDir = join(__dirname, "..", "public");
+const paymentMethods = new Set(["cash", "cash_app", "venmo", "zelle", "paypal", "bank_account"]);
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -135,109 +135,39 @@ function dollarsToCents(value) {
   return Math.round(amount * 100);
 }
 
-function centsToDwollaAmount(cents) {
+function centsToDollarAmount(cents) {
   return (Number(cents || 0) / 100).toFixed(2);
 }
 
-function dwollaBaseUrl() {
-  return config.dwolla.environment === "production"
-    ? "https://api.dwolla.com"
-    : "https://api-sandbox.dwolla.com";
+function normalizePaymentMethod(method) {
+  const value = String(method || "").trim().toLowerCase();
+  if (!paymentMethods.has(value)) {
+    throw Object.assign(new Error("Choose a supported payment method."), { statusCode: 400 });
+  }
+  return value;
 }
 
-async function getDwollaAccessToken() {
-  if (!config.dwolla.enabled) {
-    throw new Error("Dwolla is disabled.");
-  }
-
-  if (!config.dwolla.key || !config.dwolla.secret) {
-    throw new Error("Dwolla API key and secret are not configured.");
-  }
-
-  const credentials = Buffer.from(`${config.dwolla.key}:${config.dwolla.secret}`).toString("base64");
-  const response = await fetch(`${dwollaBaseUrl()}/token`, {
-    method: "POST",
-    headers: {
-      Authorization: `Basic ${credentials}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-      Accept: "application/json"
-    },
-    body: "grant_type=client_credentials"
-  });
-
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok || !payload.access_token) {
-    throw new Error(payload.message || payload.error_description || "Dwolla token request failed.");
-  }
-
-  return payload.access_token;
-}
-
-async function createDwollaDonationTransfer({ amountCents, sourceFundingSourceUrl, donorName, donorEmail }) {
-  if (!config.dwolla.enabled) {
-    return { transferUrl: "", processorStatus: "dwolla_disabled", note: "Dwolla is disabled." };
-  }
-
-  if (!config.dwolla.companyFundingSourceUrl) {
-    return {
-      transferUrl: "",
-      processorStatus: "dwolla_destination_missing",
-      note: "Dwolla destination funding source is not configured."
-    };
-  }
-
-  const sourceUrl = String(sourceFundingSourceUrl || config.dwolla.donorFundingSourceUrl || "").trim();
-  if (!sourceUrl) {
-    return {
-      transferUrl: "",
-      processorStatus: "dwolla_source_missing",
-      note: "Dwolla transfer was not started because no donor funding source was provided."
-    };
-  }
-
-  const token = await getDwollaAccessToken();
-  const correlationId = randomUUID();
-  const response = await fetch(`${dwollaBaseUrl()}/transfers`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/vnd.dwolla.v1.hal+json",
-      "Content-Type": "application/vnd.dwolla.v1.hal+json",
-      "Idempotency-Key": correlationId
-    },
-    body: JSON.stringify({
-      _links: {
-        source: { href: sourceUrl },
-        destination: { href: config.dwolla.companyFundingSourceUrl }
-      },
-      amount: {
-        currency: "USD",
-        value: centsToDwollaAmount(amountCents)
-      },
-      correlationId,
-      metadata: {
-        source: "237_ville_anonymous_donation",
-        donorName: String(donorName || "Anonymous").slice(0, 80),
-        donorEmail: String(donorEmail || "").slice(0, 120)
-      }
-    })
-  });
-
-  if (response.status !== 201) {
-    const payload = await response.json().catch(() => ({}));
-    const detail =
-      payload.message ||
-      payload.error_description ||
-      payload._embedded?.errors?.map((item) => item.message).join("; ") ||
-      "Dwolla transfer request failed.";
-    throw new Error(detail);
-  }
-
-  return {
-    transferUrl: response.headers.get("location") || "",
-    processorStatus: "dwolla_pending",
-    note: "Dwolla sandbox transfer was created."
+function normalizePaymentRecordDetails(payload = {}) {
+  const details = {
+    paymentReference: String(payload.paymentReference || "").trim(),
+    payerHandle: String(payload.payerHandle || "").trim(),
+    bankName: String(payload.bankName || "").trim(),
+    accountHolderName: String(payload.accountHolderName || "").trim(),
+    bankAccountType: ["checking", "savings"].includes(payload.bankAccountType) ? payload.bankAccountType : "",
+    accountLast4: String(payload.accountLast4 || "").replace(/\D/g, "").slice(-4),
+    cashDonorName: String(payload.cashDonorName || "").trim(),
+    cashReceivedBy: String(payload.cashReceivedBy || "").trim()
   };
+
+  return Object.fromEntries(Object.entries(details).filter(([, value]) => value));
+}
+
+function publicPaymentNote(note = "") {
+  return String(note || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line && !line.toLowerCase().includes("submitted for admin review"))
+    .join("\n");
 }
 
 function validateIdentityDocument(document) {
@@ -400,6 +330,19 @@ async function createAnnouncementNotifications(announcement) {
       announcement.body.slice(0, 240),
       `/announcements/${announcement.id}`
     ]
+  );
+}
+
+async function notifyActiveMembers(type, title, body = "", link = "/") {
+  await query(
+    `
+      INSERT INTO notifications (user_id, type, title, body, link)
+      SELECT id, $1, $2, $3, $4
+      FROM users
+      WHERE notification_opt_in = TRUE
+        AND membership_status = 'active'
+    `,
+    [type, title, body, link]
   );
 }
 
@@ -715,9 +658,178 @@ async function listPayments(user, { includeAll = false } = {}) {
     donorEmail: row.donor_email || "",
     dwollaTransferUrl: row.dwolla_transfer_url || "",
     processorStatus: row.processor_status || "",
+    publishedAt: row.published_at,
+    paymentDetails: row.payment_details || {},
+    paymentDetailSnapshot: row.payment_detail_snapshot || "",
     createdAt: row.created_at,
     reviewedAt: row.reviewed_at
   }));
+}
+
+function toPaymentDetail(row) {
+  return {
+    method: row.method,
+    displayName: row.display_name,
+    accountIdentifier: row.account_identifier || "",
+    instructions: row.instructions || "",
+    enabled: row.enabled,
+    updatedAt: row.updated_at
+  };
+}
+
+function paymentDetailSnapshot(detail) {
+  if (!detail) return "";
+  return [
+    detail.display_name,
+    detail.account_identifier ? `Account: ${detail.account_identifier}` : "",
+    detail.instructions || ""
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+async function listOrganizationPaymentDetails({ includeDisabled = false } = {}) {
+  const { rows } = await query(
+    `
+      SELECT *
+      FROM organization_payment_details
+      WHERE ($1::boolean = true OR enabled = true)
+      ORDER BY
+        CASE method
+          WHEN 'cash' THEN 1
+          WHEN 'cash_app' THEN 2
+          WHEN 'venmo' THEN 3
+          WHEN 'zelle' THEN 4
+          WHEN 'paypal' THEN 5
+          ELSE 6
+        END
+    `,
+    [Boolean(includeDisabled)]
+  );
+
+  return rows.map(toPaymentDetail);
+}
+
+async function getOrganizationPaymentDetail(method) {
+  const { rows } = await query(
+    "SELECT * FROM organization_payment_details WHERE method = $1 LIMIT 1",
+    [method]
+  );
+  return rows[0] ? toPaymentDetail(rows[0]) : null;
+}
+
+async function requireEnabledPaymentDetail(method) {
+  const detail = await getOrganizationPaymentDetail(method);
+  if (!detail || !detail.enabled) {
+    throw Object.assign(new Error("This payment method is not currently available."), { statusCode: 400 });
+  }
+  return detail;
+}
+
+function toExpenditure(row) {
+  return {
+    id: Number(row.id),
+    title: row.title,
+    category: row.category || "",
+    vendor: row.vendor || "",
+    amountCents: Number(row.amount_cents),
+    expenseDate: row.expense_date,
+    note: row.note || "",
+    status: row.status,
+    createdBy: row.created_by ? Number(row.created_by) : null,
+    publishedAt: row.published_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+async function listExpenditures({ publishedOnly = false, limit = 100 } = {}) {
+  const { rows } = await query(
+    `
+      SELECT *
+      FROM expenditures
+      WHERE ($1::boolean = false OR status = 'published')
+      ORDER BY expense_date DESC, created_at DESC
+      LIMIT $2
+    `,
+    [Boolean(publishedOnly), limit]
+  );
+
+  return rows.map(toExpenditure);
+}
+
+async function getFinancialSummary() {
+  const payments = await query(
+    `
+      SELECT
+        COALESCE(SUM(amount_cents) FILTER (WHERE status = 'received'), 0)::bigint AS received_total_cents,
+        COALESCE(SUM(amount_cents) FILTER (WHERE status = 'received' AND purpose = 'donation'), 0)::bigint AS donation_total_cents,
+        COALESCE(SUM(amount_cents) FILTER (WHERE status = 'pending'), 0)::bigint AS pending_payment_total_cents,
+        COALESCE(SUM(amount_cents) FILTER (WHERE status = 'received' AND purpose = 'donation' AND published_at IS NOT NULL), 0)::bigint AS published_donation_total_cents
+      FROM payments
+    `
+  );
+  const expenditures = await query(
+    `
+      SELECT
+        COALESCE(SUM(amount_cents), 0)::bigint AS expenditure_total_cents,
+        COALESCE(SUM(amount_cents) FILTER (WHERE status = 'published'), 0)::bigint AS published_expenditure_total_cents
+      FROM expenditures
+    `
+  );
+
+  const paymentRow = payments.rows[0] || {};
+  const expenditureRow = expenditures.rows[0] || {};
+  const receivedTotalCents = Number(paymentRow.received_total_cents || 0);
+  const expenditureTotalCents = Number(expenditureRow.expenditure_total_cents || 0);
+
+  return {
+    receivedTotalCents,
+    donationTotalCents: Number(paymentRow.donation_total_cents || 0),
+    pendingPaymentTotalCents: Number(paymentRow.pending_payment_total_cents || 0),
+    publishedDonationTotalCents: Number(paymentRow.published_donation_total_cents || 0),
+    expenditureTotalCents,
+    publishedExpenditureTotalCents: Number(expenditureRow.published_expenditure_total_cents || 0),
+    accountBalanceCents: receivedTotalCents - expenditureTotalCents
+  };
+}
+
+async function listPublishedFinancials() {
+  const donations = await query(
+    `
+      SELECT payments.*, users.full_name, users.email
+      FROM payments
+      LEFT JOIN users ON users.id = payments.user_id
+      WHERE payments.purpose = 'donation'
+        AND payments.status = 'received'
+        AND payments.published_at IS NOT NULL
+      ORDER BY payments.published_at DESC, payments.created_at DESC
+      LIMIT 100
+    `
+  );
+
+  const expenditures = await listExpenditures({ publishedOnly: true, limit: 100 });
+  const donationRows = donations.rows.map((row) => ({
+    id: Number(row.id),
+    donorName: row.full_name || row.donor_name || "Anonymous donor",
+    donorEmail: row.email || row.donor_email || "",
+    amountCents: Number(row.amount_cents),
+    note: publicPaymentNote(row.note),
+    publishedAt: row.published_at,
+    createdAt: row.created_at
+  }));
+  const donationTotalCents = donationRows.reduce((sum, item) => sum + item.amountCents, 0);
+  const expenditureTotalCents = expenditures.reduce((sum, item) => sum + item.amountCents, 0);
+
+  return {
+    donations: donationRows,
+    expenditures,
+    summary: {
+      donationTotalCents,
+      expenditureTotalCents,
+      publishedNetCents: donationTotalCents - expenditureTotalCents
+    }
+  };
 }
 
 async function listNotifications(user) {
@@ -843,6 +955,10 @@ async function handleApi(req, res, url) {
   const method = req.method || "GET";
   const pathname = url.pathname;
 
+  if (method === "GET" && pathname === "/api/payment-details") {
+    return sendJson(res, 200, { paymentDetails: await listOrganizationPaymentDetails() });
+  }
+
   if (method === "POST" && pathname === "/api/auth/register") {
     const payload = await readJson(req);
     requireFields(payload, ["email", "firstName", "lastName", "registrationStatement"]);
@@ -918,26 +1034,14 @@ async function handleApi(req, res, url) {
     const amountCents = dollarsToCents(payload.amount);
     const donorName = String(payload.donorName || "").trim();
     const donorEmail = normalizeEmail(payload.donorEmail || "");
-    const donorFundingSourceUrl = String(payload.donorFundingSourceUrl || "").trim();
     const donorNote = String(payload.note || "").trim();
-    let dwollaResult = { transferUrl: "", processorStatus: "not_started", note: "" };
-
-    try {
-      dwollaResult = await createDwollaDonationTransfer({
-        amountCents,
-        sourceFundingSourceUrl: donorFundingSourceUrl,
-        donorName,
-        donorEmail
-      });
-    } catch (error) {
-      dwollaResult = {
-        transferUrl: "",
-        processorStatus: "dwolla_error",
-        note: `Dwolla transfer error: ${String(error.message || "Unknown error").slice(0, 280)}`
-      };
-    }
-
-    const note = [donorNote, dwollaResult.note].filter(Boolean).join("\n");
+    const paymentMethod = normalizePaymentMethod(payload.method);
+    const paymentDetails = normalizePaymentRecordDetails(payload);
+    const organizationPaymentDetail = await requireEnabledPaymentDetail(paymentMethod);
+    const reviewNote = config.dwolla.enabled
+      ? "Dwolla sandbox donation record submitted for admin review."
+      : "Donation record submitted for admin review.";
+    const note = [donorNote, reviewNote].filter(Boolean).join("\n");
     const { rows } = await query(
       `
         INSERT INTO payments (
@@ -950,34 +1054,35 @@ async function handleApi(req, res, url) {
           donor_name,
           donor_email,
           dwolla_transfer_url,
-          processor_status
+          processor_status,
+          payment_details,
+          payment_detail_snapshot
         )
-        VALUES (NULL, 'donation', $1, 'dwolla_sandbox', $2, $3, $4, $5, $3, $6)
+        VALUES (NULL, 'donation', $1, $2, $3, '', $4, $5, '', 'pending_admin_review', $6::jsonb, $7)
         RETURNING *
       `,
       [
         amountCents,
+        paymentMethod,
         note,
-        dwollaResult.transferUrl,
         donorName,
         donorEmail,
-        dwollaResult.processorStatus
+        JSON.stringify(paymentDetails),
+        paymentDetailSnapshot(organizationPaymentDetail)
       ]
     );
 
     await notifyAdmins(
       "donation",
       "Anonymous donation submitted",
-      `${donorName || "Anonymous donor"} submitted a ${centsToDwollaAmount(amountCents)} donation for review.`,
+      `${donorName || "Anonymous donor"} submitted a $${centsToDollarAmount(amountCents)} donation for review.`,
       "/admin"
     );
 
     return sendJson(res, 201, {
-      message: dwollaResult.transferUrl
-        ? "Donation submitted through Dwolla sandbox."
-        : "Donation submitted for admin review.",
+      message: "Donation submitted for admin review.",
       payment: rows[0],
-      processorStatus: dwollaResult.processorStatus
+      processorStatus: "pending_admin_review"
     });
   }
 
@@ -1098,9 +1203,10 @@ async function handleApi(req, res, url) {
     const user = await requireUser(req, res);
     if (!user) return;
 
-    const [notifications, payments] = await Promise.all([
+    const [notifications, payments, paymentDetails] = await Promise.all([
       listNotifications(user),
-      listPayments(user)
+      listPayments(user),
+      listOrganizationPaymentDetails()
     ]);
 
     if (isOnboardingUser(user)) {
@@ -1109,20 +1215,23 @@ async function handleApi(req, res, url) {
         onboarding: true,
         policy: config.organizationPolicy,
         registrationFeeCents: config.registrationFeeCents,
+        paymentDetails,
         payments,
         notifications,
         announcements: [],
         events: [],
         questions: [],
-        ballots: []
+        ballots: [],
+        financials: { donations: [], expenditures: [], summary: { donationTotalCents: 0, expenditureTotalCents: 0, publishedNetCents: 0 } }
       });
     }
 
-    const [announcements, events, questions, ballots] = await Promise.all([
+    const [announcements, events, questions, ballots, financials] = await Promise.all([
       listAnnouncements(10),
       listEvents(10),
       listQuestions(),
-      listBallots(user, { includeDrafts: user.role === "admin" })
+      listBallots(user, { includeDrafts: user.role === "admin" }),
+      listPublishedFinancials()
     ]);
 
     return sendJson(res, 200, {
@@ -1132,6 +1241,8 @@ async function handleApi(req, res, url) {
       events,
       questions,
       ballots,
+      financials,
+      paymentDetails,
       payments,
       notifications
     });
@@ -1222,18 +1333,32 @@ async function handleApi(req, res, url) {
     }
 
     const payload = await readJson(req);
+    const paymentMethod = normalizePaymentMethod(payload.method);
+    const paymentDetails = normalizePaymentRecordDetails(payload);
+    const organizationPaymentDetail = await requireEnabledPaymentDetail(paymentMethod);
     const { rows } = await query(
       `
-        INSERT INTO payments (user_id, purpose, amount_cents, method, note, external_reference)
-        VALUES ($1, 'registration_fee', $2, $3, $4, $5)
+        INSERT INTO payments (
+          user_id,
+          purpose,
+          amount_cents,
+          method,
+          note,
+          external_reference,
+          payment_details,
+          payment_detail_snapshot
+        )
+        VALUES ($1, 'registration_fee', $2, $3, $4, $5, $6::jsonb, $7)
         RETURNING *
       `,
       [
         user.id,
         config.registrationFeeCents,
-        String(payload.method || "offline").trim(),
+        paymentMethod,
         String(payload.note || "").trim(),
-        String(payload.externalReference || "").trim()
+        String(payload.externalReference || "").trim(),
+        JSON.stringify(paymentDetails),
+        paymentDetailSnapshot(organizationPaymentDetail)
       ]
     );
 
@@ -1679,20 +1804,34 @@ async function handleApi(req, res, url) {
     const payload = await readJson(req);
     const purpose = payload.purpose === "donation" ? "donation" : "dues";
     const amountCents = dollarsToCents(payload.amount);
+    const paymentMethod = normalizePaymentMethod(payload.method);
+    const paymentDetails = normalizePaymentRecordDetails(payload);
+    const organizationPaymentDetail = await requireEnabledPaymentDetail(paymentMethod);
 
     const { rows } = await query(
       `
-        INSERT INTO payments (user_id, purpose, amount_cents, method, note, external_reference)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        INSERT INTO payments (
+          user_id,
+          purpose,
+          amount_cents,
+          method,
+          note,
+          external_reference,
+          payment_details,
+          payment_detail_snapshot
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
         RETURNING *
       `,
       [
         user.id,
         purpose,
         amountCents,
-        String(payload.method || "offline").trim(),
+        paymentMethod,
         String(payload.note || "").trim(),
-        String(payload.externalReference || "").trim()
+        String(payload.externalReference || "").trim(),
+        JSON.stringify(paymentDetails),
+        paymentDetailSnapshot(organizationPaymentDetail)
       ]
     );
 
@@ -1907,6 +2046,116 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { payment });
   }
 
+  const paymentPublishMatch = pathname.match(/^\/api\/admin\/payments\/(\d+)\/publish$/);
+  if (method === "POST" && paymentPublishMatch) {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    const paymentId = parseId(paymentPublishMatch[1]);
+    const { rows } = await query(
+      `
+        UPDATE payments
+        SET published_at = COALESCE(published_at, now())
+        WHERE id = $1
+          AND purpose = 'donation'
+          AND status = 'received'
+        RETURNING *
+      `,
+      [paymentId]
+    );
+
+    if (rows.length === 0) {
+      return sendError(res, 404, "Received donation not found.");
+    }
+
+    await notifyActiveMembers(
+      "financial",
+      "Donation published",
+      `A donation of $${centsToDollarAmount(rows[0].amount_cents)} was published for members to review.`,
+      "/financials"
+    );
+
+    return sendJson(res, 200, { payment: rows[0] });
+  }
+
+  if (method === "POST" && pathname === "/api/admin/expenditures") {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    const payload = await readJson(req);
+    requireFields(payload, ["title", "amount"]);
+
+    const amountCents = dollarsToCents(payload.amount);
+    const status = payload.status === "published" ? "published" : "draft";
+    const { rows } = await query(
+      `
+        INSERT INTO expenditures (
+          title,
+          category,
+          vendor,
+          amount_cents,
+          expense_date,
+          note,
+          status,
+          created_by,
+          published_at
+        )
+        VALUES ($1, $2, $3, $4, COALESCE(NULLIF($5, '')::date, CURRENT_DATE), $6, $7, $8, CASE WHEN $7 = 'published' THEN now() ELSE NULL END)
+        RETURNING *
+      `,
+      [
+        String(payload.title).trim(),
+        String(payload.category || "").trim(),
+        String(payload.vendor || "").trim(),
+        amountCents,
+        String(payload.expenseDate || "").trim(),
+        String(payload.note || "").trim(),
+        status,
+        admin.id
+      ]
+    );
+
+    if (status === "published") {
+      await notifyActiveMembers(
+        "financial",
+        "Expenditure published",
+        `${rows[0].title} was published as a $${centsToDollarAmount(rows[0].amount_cents)} organization expenditure.`,
+        "/financials"
+      );
+    }
+
+    return sendJson(res, 201, { expenditure: toExpenditure(rows[0]) });
+  }
+
+  const expenditurePublishMatch = pathname.match(/^\/api\/admin\/expenditures\/(\d+)\/publish$/);
+  if (method === "POST" && expenditurePublishMatch) {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    const expenditureId = parseId(expenditurePublishMatch[1]);
+    const { rows } = await query(
+      `
+        UPDATE expenditures
+        SET status = 'published',
+            published_at = COALESCE(published_at, now()),
+            updated_at = now()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [expenditureId]
+    );
+
+    if (rows.length === 0) {
+      return sendError(res, 404, "Expenditure not found.");
+    }
+
+    await notifyActiveMembers(
+      "financial",
+      "Expenditure published",
+      `${rows[0].title} was published as a $${centsToDollarAmount(rows[0].amount_cents)} organization expenditure.`,
+      "/financials"
+    );
+
+    return sendJson(res, 200, { expenditure: toExpenditure(rows[0]) });
+  }
+
   const notificationMatch = pathname.match(/^\/api\/notifications\/(\d+)\/read$/);
   if (method === "POST" && notificationMatch) {
     const user = await requireUser(req, res);
@@ -1940,6 +2189,59 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { deletedCount: rowCount });
   }
 
+  if (method === "GET" && pathname === "/api/admin/payment-details") {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    return sendJson(res, 200, { paymentDetails: await listOrganizationPaymentDetails({ includeDisabled: true }) });
+  }
+
+  const paymentDetailMatch = pathname.match(/^\/api\/admin\/payment-details\/([a-z_]+)$/);
+  if ((method === "PATCH" || method === "PUT") && paymentDetailMatch) {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    const paymentMethod = normalizePaymentMethod(paymentDetailMatch[1]);
+    const payload = await readJson(req);
+    const displayName = String(payload.displayName || "").trim();
+
+    if (!displayName) {
+      return sendError(res, 400, "Display name is required.");
+    }
+
+    const { rows } = await query(
+      `
+        INSERT INTO organization_payment_details (
+          method,
+          display_name,
+          account_identifier,
+          instructions,
+          enabled,
+          updated_by,
+          updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, now())
+        ON CONFLICT (method)
+        DO UPDATE SET
+          display_name = EXCLUDED.display_name,
+          account_identifier = EXCLUDED.account_identifier,
+          instructions = EXCLUDED.instructions,
+          enabled = EXCLUDED.enabled,
+          updated_by = EXCLUDED.updated_by,
+          updated_at = now()
+        RETURNING *
+      `,
+      [
+        paymentMethod,
+        displayName,
+        String(payload.accountIdentifier || "").trim(),
+        String(payload.instructions || "").trim(),
+        Boolean(payload.enabled),
+        admin.id
+      ]
+    );
+
+    return sendJson(res, 200, { paymentDetail: toPaymentDetail(rows[0]) });
+  }
+
   if (method === "GET" && pathname === "/api/admin/notifications") {
     const admin = await requireAdmin(req, res);
     if (!admin) return;
@@ -1956,15 +2258,18 @@ async function handleApi(req, res, url) {
   if (method === "GET" && pathname === "/api/admin/summary") {
     const admin = await requireAdmin(req, res);
     if (!admin) return;
-    const [members, questions, payments, ballots, announcements, events] = await Promise.all([
+    const [members, questions, payments, ballots, announcements, events, expenditures, financialSummary, paymentDetails] = await Promise.all([
       listMembers(),
       listQuestions({ includePending: true }),
       listPayments(admin, { includeAll: true }),
       listBallots(admin, { includeDrafts: true, includeArchived: true }),
       listAdminAnnouncements(),
-      listAdminEvents()
+      listAdminEvents(),
+      listExpenditures(),
+      getFinancialSummary(),
+      listOrganizationPaymentDetails({ includeDisabled: true })
     ]);
-    return sendJson(res, 200, { members, questions, payments, ballots, announcements, events });
+    return sendJson(res, 200, { members, questions, payments, ballots, announcements, events, expenditures, financialSummary, paymentDetails });
   }
 
   return sendError(res, 404, "API route not found.");

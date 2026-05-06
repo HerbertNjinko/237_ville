@@ -170,6 +170,9 @@ CREATE TABLE IF NOT EXISTS payments (
   donor_email TEXT DEFAULT '',
   dwolla_transfer_url TEXT DEFAULT '',
   processor_status TEXT DEFAULT '',
+  published_at TIMESTAMPTZ,
+  payment_details JSONB NOT NULL DEFAULT '{}'::jsonb,
+  payment_detail_snapshot TEXT DEFAULT '',
   reviewed_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
   reviewed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -180,8 +183,63 @@ ALTER TABLE payments ADD COLUMN IF NOT EXISTS donor_name TEXT DEFAULT '';
 ALTER TABLE payments ADD COLUMN IF NOT EXISTS donor_email TEXT DEFAULT '';
 ALTER TABLE payments ADD COLUMN IF NOT EXISTS dwolla_transfer_url TEXT DEFAULT '';
 ALTER TABLE payments ADD COLUMN IF NOT EXISTS processor_status TEXT DEFAULT '';
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS payment_details JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS payment_detail_snapshot TEXT DEFAULT '';
 ALTER TABLE payments DROP CONSTRAINT IF EXISTS payments_purpose_check;
 ALTER TABLE payments ADD CONSTRAINT payments_purpose_check CHECK (purpose IN ('dues', 'donation', 'registration_fee'));
+
+CREATE TABLE IF NOT EXISTS organization_payment_details (
+  method TEXT PRIMARY KEY CHECK (method IN ('cash', 'cash_app', 'venmo', 'zelle', 'paypal', 'bank_account')),
+  display_name TEXT NOT NULL,
+  account_identifier TEXT DEFAULT '',
+  instructions TEXT DEFAULT '',
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE organization_payment_details ADD COLUMN IF NOT EXISTS account_identifier TEXT DEFAULT '';
+ALTER TABLE organization_payment_details ADD COLUMN IF NOT EXISTS instructions TEXT DEFAULT '';
+ALTER TABLE organization_payment_details ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE organization_payment_details ADD COLUMN IF NOT EXISTS updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE organization_payment_details DROP CONSTRAINT IF EXISTS organization_payment_details_method_check;
+ALTER TABLE organization_payment_details ADD CONSTRAINT organization_payment_details_method_check CHECK (method IN ('cash', 'cash_app', 'venmo', 'zelle', 'paypal', 'bank_account'));
+
+INSERT INTO organization_payment_details (method, display_name, account_identifier, instructions, enabled)
+VALUES
+  ('cash', 'Cash', '', 'Enter the donor name and the person who received the cash.', TRUE),
+  ('cash_app', 'Cash App', '', '', TRUE),
+  ('venmo', 'Venmo', '', '', TRUE),
+  ('zelle', 'Zelle', '', '', TRUE),
+  ('paypal', 'PayPal', '', '', TRUE),
+  ('bank_account', 'Bank account / ACH review', '', '', TRUE)
+ON CONFLICT (method) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS expenditures (
+  id BIGSERIAL PRIMARY KEY,
+  title TEXT NOT NULL,
+  category TEXT DEFAULT '',
+  vendor TEXT DEFAULT '',
+  amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+  expense_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  note TEXT DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published')),
+  created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  published_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE expenditures ADD COLUMN IF NOT EXISTS category TEXT DEFAULT '';
+ALTER TABLE expenditures ADD COLUMN IF NOT EXISTS vendor TEXT DEFAULT '';
+ALTER TABLE expenditures ADD COLUMN IF NOT EXISTS expense_date DATE NOT NULL DEFAULT CURRENT_DATE;
+ALTER TABLE expenditures ADD COLUMN IF NOT EXISTS note TEXT DEFAULT '';
+ALTER TABLE expenditures ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'draft';
+ALTER TABLE expenditures ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;
+ALTER TABLE expenditures DROP CONSTRAINT IF EXISTS expenditures_status_check;
+ALTER TABLE expenditures ADD CONSTRAINT expenditures_status_check CHECK (status IN ('draft', 'published'));
 
 CREATE TABLE IF NOT EXISTS notifications (
   id BIGSERIAL PRIMARY KEY,
@@ -201,5 +259,7 @@ CREATE INDEX IF NOT EXISTS idx_questions_status_created ON member_questions(stat
 CREATE INDEX IF NOT EXISTS idx_ballots_status_created ON ballots(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_votes_ballot_option ON votes(ballot_id, option_id);
 CREATE INDEX IF NOT EXISTS idx_payments_user_created ON payments(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_payments_published ON payments(purpose, status, published_at DESC);
+CREATE INDEX IF NOT EXISTS idx_expenditures_status_date ON expenditures(status, expense_date DESC);
 CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_users_membership_status ON users(membership_status);
