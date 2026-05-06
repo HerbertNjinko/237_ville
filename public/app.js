@@ -6,6 +6,7 @@ const state = {
   admin: null,
   adminNotifications: null,
   publicPaymentDetails: null,
+  publicAbout: null,
   adminPaymentFilter: "all",
   memberFilter: {
     scope: "all",
@@ -18,7 +19,7 @@ const state = {
     dateTo: ""
   },
   view: "overview",
-  authMode: "login",
+  authMode: "home",
   message: "",
   messageType: ""
 };
@@ -36,6 +37,7 @@ const memberViews = [
 
 const adminViews = [
   ["overview", "Overview"],
+  ["about", "About"],
   ["announcements", "Announcements"],
   ["questions", "Questions"],
   ["events", "Events"],
@@ -198,6 +200,15 @@ async function loadPublicPaymentDetails() {
   }
 }
 
+async function loadPublicAbout() {
+  try {
+    const payload = await api("/api/about");
+    state.publicAbout = payload.about || { summary: "", missionStatement: "", purpose: "", articles: [], positions: [] };
+  } catch {
+    state.publicAbout = { summary: "", missionStatement: "", purpose: "", articles: [], positions: [] };
+  }
+}
+
 async function loadDashboard() {
   if (!state.user) return;
   const data = await api("/api/dashboard");
@@ -348,100 +359,243 @@ function renderPaymentRecordFields({ includeBank = true } = {}) {
   `;
 }
 
+function publicAboutFallback() {
+  return state.publicAbout || { summary: "", missionStatement: "", purpose: "", articles: [], positions: [] };
+}
+
+function renderPublicMenu() {
+  const mode = state.authMode || "home";
+  const items = [
+    ["login", "Sign in"],
+    ["register", "Register"],
+    ["donate", "Donate"],
+    ["about", "About"]
+  ];
+
+  return `
+    <header class="public-topbar">
+      <button class="public-brand-link" data-auth-mode="home" type="button" aria-label="237 Ville home">
+        <img src="/assets/237-mark.svg" alt="">
+        <span>237 Ville</span>
+      </button>
+      <nav class="public-menu" aria-label="Public navigation">
+        ${items
+          .map(
+            ([key, label]) => `
+              <button class="tab-button ${mode === key ? "active" : ""}" data-auth-mode="${key}" type="button">
+                ${escapeHtml(label)}
+              </button>
+            `
+          )
+          .join("")}
+      </nav>
+    </header>
+  `;
+}
+
 function renderAuth() {
+  const about = publicAboutFallback();
+
+  app.innerHTML = `
+    <main class="public-layout">
+      ${renderPublicMenu()}
+      ${state.authMode === "about" ? renderPublicAboutPage(about) : state.authMode === "login" || state.authMode === "register" || state.authMode === "donate" ? renderPublicFormPage(about) : renderPublicHome(about)}
+    </main>
+  `;
+}
+
+function renderPublicHome(about) {
+  return `
+    <section class="public-hero">
+      <div>
+        <img src="/assets/237-mark.svg" alt="237 Ville">
+        <h1>237 Ville</h1>
+        <p>${escapeHtml(about.summary || "Member hub for community updates, public articles, elections, events, dues, donations, and questions for the board.")}</p>
+      </div>
+    </section>
+    <section class="public-section">
+      <div class="panel-header">
+        <div>
+          <h2>Public articles</h2>
+          <p>Articles and images published by the organization for members and anonymous visitors.</p>
+        </div>
+      </div>
+      ${renderPublicAboutArticles(about.articles || [])}
+    </section>
+  `;
+}
+
+function renderPublicAboutPage(about) {
+  return `
+    <section class="public-content-panel">
+      <h2>About 237 Ville</h2>
+      ${renderPublicAbout(about)}
+    </section>
+  `;
+}
+
+function renderPublicFormPage(about) {
   const isRegister = state.authMode === "register";
   const isDonate = state.authMode === "donate";
   const formAction = isDonate ? "anonymous-donation" : isRegister ? "register" : "login";
   const heading = isDonate ? "Make a donation" : isRegister ? "Create member account" : "Member sign in";
 
-  app.innerHTML = `
-    <main class="auth-layout">
-      <section class="auth-panel">
-        <div class="auth-brand">
-          <div>
-            <img src="/assets/237-mark.svg" alt="237 Ville">
-            <h1>237 Ville</h1>
-            <p>Member hub for community updates, elections, events, dues, donations, and questions for the board.</p>
-          </div>
-          <p>Registered members receive in-app notifications when admins publish organization updates.</p>
-        </div>
-        <div class="auth-form-panel">
-          <div class="auth-tabs" role="tablist" aria-label="Authentication">
-            <button class="tab-button ${!isRegister && !isDonate ? "active" : ""}" data-auth-mode="login" type="button">Sign in</button>
-            <button class="tab-button ${isRegister ? "active" : ""}" data-auth-mode="register" type="button">Register</button>
-            <button class="tab-button ${isDonate ? "active" : ""}" data-auth-mode="donate" type="button">Donate</button>
-          </div>
-          <h2>${heading}</h2>
-          <form class="form-stack" data-action="${formAction}">
-            ${
-              isRegister
-                ? `<div class="form-grid">
-                    <label class="field">
-                      <span>First name</span>
-                      <input name="firstName" autocomplete="given-name" required>
-                    </label>
-                    <label class="field">
-                      <span>Last name</span>
-                      <input name="lastName" autocomplete="family-name" required>
-                    </label>
-                  </div>`
-                : ""
-            }
-            ${
-              isDonate
-                ? `<div class="form-grid">
-                    <label class="field">
-                      <span>Name</span>
-                      <input name="donorName" autocomplete="name">
-                    </label>
-                    <label class="field">
-                      <span>Email</span>
-                      <input name="donorEmail" type="email" autocomplete="email">
-                    </label>
-                  </div>
+  return `
+    <section class="public-action-layout">
+      <aside class="public-intro">
+        <h1>237 Ville</h1>
+        <p>${escapeHtml(about.summary || "Stay connected to the organization, participate in votes, follow events, and support the community.")}</p>
+      </aside>
+      <div class="public-form-card">
+        <h2>${heading}</h2>
+        <form class="form-stack" data-action="${formAction}">
+          ${
+            isRegister
+              ? `<div class="form-grid">
                   <label class="field">
-                    <span>Donation amount</span>
-                    <input name="amount" type="number" min="1" step="0.01" required>
+                    <span>First name</span>
+                    <input name="firstName" autocomplete="given-name" required>
                   </label>
-                  ${renderPaymentMethodSelect(availablePaymentDetails())}
-                  ${renderPaymentGuides(availablePaymentDetails())}
-                  ${renderPaymentRecordFields()}
                   <label class="field">
-                    <span>Note</span>
-                    <textarea name="note"></textarea>
-                  </label>`
-                : `<label class="field">
+                    <span>Last name</span>
+                    <input name="lastName" autocomplete="family-name" required>
+                  </label>
+                </div>`
+              : ""
+          }
+          ${
+            isDonate
+              ? `<div class="form-grid">
+                  <label class="field">
+                    <span>Name</span>
+                    <input name="donorName" autocomplete="name">
+                  </label>
+                  <label class="field">
                     <span>Email</span>
-                    <input name="email" type="email" autocomplete="email" required>
-                  </label>`
-            }
-            ${
-              isRegister
-                ? `<label class="field">
-                    <span>Who you are and why you want to join</span>
-                    <textarea name="registrationStatement" minlength="40" required></textarea>
+                    <input name="donorEmail" type="email" autocomplete="email">
                   </label>
-                  <label class="field">
-                    <span>ID card for verification</span>
-                    <input name="identityDocument" type="file" accept="image/png,image/jpeg,image/webp,application/pdf" required>
-                  </label>
-                  <p class="muted">Accepted files: JPG, PNG, WebP, or PDF up to 3 MB.</p>`
-                : ""
-            }
-            ${
-              isRegister || isDonate
-                ? ""
-                : `<label class="field">
-                    <span>Password</span>
-                    <input name="password" type="password" autocomplete="current-password" minlength="8" required>
-                  </label>`
-            }
-            <button class="primary-button" type="submit">${isDonate ? "Donate" : isRegister ? "Create account" : "Sign in"}</button>
-            <p class="message ${state.messageType === "ok" ? "ok" : ""}">${escapeHtml(state.message)}</p>
-          </form>
-        </div>
-      </section>
-    </main>
+                </div>
+                <label class="field">
+                  <span>Donation amount</span>
+                  <input name="amount" type="number" min="1" step="0.01" required>
+                </label>
+                ${renderPaymentMethodSelect(availablePaymentDetails())}
+                ${renderPaymentGuides(availablePaymentDetails())}
+                ${renderPaymentRecordFields()}
+                <label class="field">
+                  <span>Note</span>
+                  <textarea name="note"></textarea>
+                </label>`
+              : `<label class="field">
+                  <span>Email</span>
+                  <input name="email" type="email" autocomplete="email" required>
+                </label>`
+          }
+          ${
+            isRegister
+              ? `<label class="field">
+                  <span>Who you are and why you want to join</span>
+                  <textarea name="registrationStatement" minlength="40" required></textarea>
+                </label>
+                <label class="field">
+                  <span>ID card for verification</span>
+                  <input name="identityDocument" type="file" accept="image/png,image/jpeg,image/webp,application/pdf" required>
+                </label>
+                <p class="muted">Accepted files: JPG, PNG, WebP, or PDF up to 3 MB.</p>`
+              : ""
+          }
+          ${
+            isRegister || isDonate
+              ? ""
+              : `<label class="field">
+                  <span>Password</span>
+                  <input name="password" type="password" autocomplete="current-password" minlength="8" required>
+                </label>`
+          }
+          <button class="primary-button" type="submit">${isDonate ? "Donate" : isRegister ? "Create account" : "Sign in"}</button>
+          <p class="message ${state.messageType === "ok" ? "ok" : ""}">${escapeHtml(state.message)}</p>
+        </form>
+      </div>
+    </section>
+  `;
+}
+
+function renderPublicAbout(about) {
+  return `
+    <section class="about-public">
+      <article class="policy-document">
+        <h3>Organization summary</h3>
+        <p>${escapeHtml(about.summary || "237 Ville is a community organization focused on member participation and transparent leadership.")}</p>
+      </article>
+      <article class="policy-document">
+        <h3>Mission statement</h3>
+        <p>${escapeHtml(about.missionStatement || "Our mission is to build a connected, transparent, and active community where members can participate in decisions and support one another.")}</p>
+      </article>
+      <article class="policy-document">
+        <h3>Organization purpose</h3>
+        <p>${escapeHtml(about.purpose || "The organization supports community updates, events, voting, dues, donations, and member engagement.")}</p>
+      </article>
+      <div>
+        <h3>Organization leadership</h3>
+        ${renderLeadershipCards(about.positions || [])}
+      </div>
+    </section>
+  `;
+}
+
+function renderPublicAboutArticles(articles) {
+  if (!articles.length) return emptyState("No public articles have been published yet.");
+
+  return `
+    <div class="item-list">
+      ${articles
+        .map(
+          (article) => `
+            <article class="public-article-card ${article.image?.dataUrl ? "" : "without-image"}">
+              ${
+                article.image?.dataUrl
+                  ? `<img src="${escapeHtml(article.image.dataUrl)}" alt="${escapeHtml(article.title)}">`
+                  : ""
+              }
+              <div>
+                <h4>${escapeHtml(article.title)}</h4>
+                <p>${escapeHtml(article.body)}</p>
+                <div class="item-meta">
+                  <span>${formatDate(article.createdAt)}</span>
+                </div>
+              </div>
+            </article>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderLeadershipCards(positions) {
+  if (!positions.length) return emptyState("Leadership information has not been published yet.");
+
+  return `
+    <div class="leadership-grid">
+      ${positions
+        .map(
+          (position) => `
+            <article class="leadership-card">
+              ${
+                position.image?.dataUrl
+                  ? `<img src="${escapeHtml(position.image.dataUrl)}" alt="${escapeHtml(position.title)}">`
+                  : `<div class="leadership-placeholder">${escapeHtml(position.title.slice(0, 1) || "2")}</div>`
+              }
+              <div>
+                <h4>${escapeHtml(position.title)}</h4>
+                ${position.holderName ? `<strong>${escapeHtml(position.holderName)}</strong>` : ""}
+                ${position.body ? `<p>${escapeHtml(position.body)}</p>` : ""}
+              </div>
+            </article>
+          `
+        )
+        .join("")}
+    </div>
   `;
 }
 
@@ -628,6 +782,7 @@ function topbarSubtitle() {
   if (state.user?.role === "admin") {
     const adminMap = {
       overview: "Backend statistics across members, money, content, events, votes, and notifications.",
+      about: "Manage the public home articles, About page content, and leadership position images.",
       announcements: "Publish and review organization announcements and member-sourced articles.",
       questions: "Review member questions, publish discussions, or turn submissions into articles.",
       events: "Create and manage organization events.",
@@ -659,6 +814,8 @@ function topbarSubtitle() {
 function renderView() {
   if (state.user.role === "admin") {
     switch (state.view) {
+      case "about":
+        return renderAdminAbout();
       case "announcements":
         return renderAdminAnnouncements();
       case "questions":
@@ -1454,6 +1611,199 @@ function renderAdminOverview() {
         </div>
       </section>
     </section>
+  `;
+}
+
+function renderAdminAbout() {
+  const loading = requireAdminData("Loading about page...");
+  if (loading) return loading;
+
+  const about = state.admin.about || { summary: "", missionStatement: "", purpose: "", articles: [], positions: [] };
+
+  return `
+    <section class="content-grid">
+      <div class="panel">
+        <div class="panel-header">
+          <div>
+            <h3>About page content</h3>
+            <p>These details are shown to anonymous visitors and members.</p>
+          </div>
+        </div>
+        <form class="form-stack" data-action="update-about">
+          <label class="field">
+            <span>Organization summary</span>
+            <textarea name="summary" required>${escapeHtml(about.summary || "")}</textarea>
+          </label>
+          <label class="field">
+            <span>Mission statement</span>
+            <textarea name="missionStatement" required>${escapeHtml(about.missionStatement || "")}</textarea>
+          </label>
+          <label class="field">
+            <span>Organization purpose</span>
+            <textarea name="purpose" required>${escapeHtml(about.purpose || "")}</textarea>
+          </label>
+          <button class="primary-button" type="submit">Save about content</button>
+        </form>
+      </div>
+      <section class="two-column">
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <h3>Public articles</h3>
+              <p>Articles published here are displayed on the public home page.</p>
+            </div>
+          </div>
+          ${renderAdminPublicArticleList(about.articles || [])}
+        </div>
+        <aside class="panel">
+          <div class="panel-header">
+            <div>
+              <h3>Add public article</h3>
+              <p>Publish an article and optional image on the public home page.</p>
+            </div>
+          </div>
+          ${renderPublicArticleForm()}
+        </aside>
+      </section>
+      <section class="two-column">
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <h3>Leadership positions</h3>
+              <p>Images and position details displayed on the public About page.</p>
+            </div>
+          </div>
+          ${renderAdminLeadershipList(about.positions || [])}
+        </div>
+        <aside class="panel">
+          <div class="panel-header">
+            <div>
+              <h3>Add position</h3>
+              <p>Upload an image and describe who is running the organization.</p>
+            </div>
+          </div>
+          ${renderLeadershipPositionForm()}
+        </aside>
+      </section>
+    </section>
+  `;
+}
+
+function renderPublicArticleForm(article = null) {
+  const isEdit = Boolean(article);
+  return `
+    <form class="form-stack" data-action="${isEdit ? "update-about-article" : "create-about-article"}" ${isEdit ? `data-article-id="${article.id}"` : ""}>
+      <label class="field">
+        <span>Article title</span>
+        <input name="title" value="${escapeHtml(article?.title || "")}" required>
+      </label>
+      <label class="field">
+        <span>Article body</span>
+        <textarea name="body" required>${escapeHtml(article?.body || "")}</textarea>
+      </label>
+      <div class="form-grid">
+        <label class="field">
+          <span>Display order</span>
+          <input name="displayOrder" type="number" step="1" value="${escapeHtml(article?.displayOrder ?? 0)}">
+        </label>
+        ${
+          isEdit
+            ? `<label class="field">
+                <span>Status</span>
+                <select name="status">
+                  <option value="published" ${article.status === "published" ? "selected" : ""}>Published</option>
+                  <option value="hidden" ${article.status === "hidden" ? "selected" : ""}>Hidden</option>
+                </select>
+              </label>`
+            : ""
+        }
+      </div>
+      <label class="field">
+        <span>${isEdit ? "Replace article image" : "Article image"}</span>
+        <input name="image" type="file" accept="image/png,image/jpeg,image/webp">
+      </label>
+      ${article?.image?.dataUrl ? `<img class="leadership-thumb" src="${escapeHtml(article.image.dataUrl)}" alt="${escapeHtml(article.title)}">` : ""}
+      <button class="primary-button" type="submit">${isEdit ? "Save public article" : "Publish article"}</button>
+    </form>
+  `;
+}
+
+function renderAdminPublicArticleList(articles) {
+  if (!articles.length) return emptyState("No public home articles have been added.");
+
+  return `
+    <div class="item-list">
+      ${articles
+        .map(
+          (article) => `
+            <article class="item-card">
+              ${renderPublicArticleForm(article)}
+            </article>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderLeadershipPositionForm(position = null) {
+  const isEdit = Boolean(position);
+  return `
+    <form class="form-stack" data-action="${isEdit ? "update-leadership-position" : "create-leadership-position"}" ${isEdit ? `data-position-id="${position.id}"` : ""}>
+      <label class="field">
+        <span>Position title</span>
+        <input name="title" value="${escapeHtml(position?.title || "")}" required>
+      </label>
+      <label class="field">
+        <span>Person holding position</span>
+        <input name="holderName" value="${escapeHtml(position?.holderName || "")}">
+      </label>
+      <label class="field">
+        <span>Summary or article</span>
+        <textarea name="body">${escapeHtml(position?.body || "")}</textarea>
+      </label>
+      <div class="form-grid">
+        <label class="field">
+          <span>Display order</span>
+          <input name="displayOrder" type="number" step="1" value="${escapeHtml(position?.displayOrder ?? 0)}">
+        </label>
+        ${
+          isEdit
+            ? `<label class="field">
+                <span>Status</span>
+                <select name="status">
+                  <option value="published" ${position.status === "published" ? "selected" : ""}>Published</option>
+                  <option value="hidden" ${position.status === "hidden" ? "selected" : ""}>Hidden</option>
+                </select>
+              </label>`
+            : ""
+        }
+      </div>
+      <label class="field">
+        <span>${isEdit ? "Replace image" : "Position image"}</span>
+        <input name="image" type="file" accept="image/png,image/jpeg,image/webp">
+      </label>
+      ${position?.image?.dataUrl ? `<img class="leadership-thumb" src="${escapeHtml(position.image.dataUrl)}" alt="${escapeHtml(position.title)}">` : ""}
+      <button class="primary-button" type="submit">${isEdit ? "Save position" : "Add position"}</button>
+    </form>
+  `;
+}
+
+function renderAdminLeadershipList(positions) {
+  if (!positions.length) return emptyState("No leadership positions have been added.");
+
+  return `
+    <div class="item-list">
+      ${positions
+        .map(
+          (position) => `
+            <article class="item-card">
+              ${renderLeadershipPositionForm(position)}
+            </article>
+          `
+        )
+        .join("")}
+    </div>
   `;
 }
 
@@ -2415,6 +2765,27 @@ function parseOptions(text) {
     });
 }
 
+async function imagePayloadFromInput(input) {
+  const file = input?.files?.[0];
+  if (!file) return null;
+
+  if (file.size > 3_000_000) {
+    throw new Error("Image file must be 3 MB or smaller.");
+  }
+
+  const acceptedTypes = ["image/jpeg", "image/png", "image/webp"];
+  if (!acceptedTypes.includes(file.type)) {
+    throw new Error("Image must be a JPG, PNG, or WebP file.");
+  }
+
+  return {
+    name: file.name,
+    type: file.type,
+    size: file.size,
+    dataUrl: await fileToDataUrl(file)
+  };
+}
+
 async function handleSubmit(event) {
   const form = event.target.closest("form[data-action]");
   if (!form) return;
@@ -2571,6 +2942,67 @@ async function handleSubmit(event) {
       state.message = "Payment record submitted.";
       state.messageType = "ok";
       await refreshAll({ includeAdmin: state.user.role === "admin" });
+      return;
+    }
+
+    if (action === "update-about") {
+      await api("/api/admin/about", {
+        method: "PATCH",
+        body: JSON.stringify(payload)
+      });
+      state.message = "About page content saved.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
+    if (action === "create-leadership-position") {
+      const image = await imagePayloadFromInput(form.elements.image);
+      await api("/api/admin/about/positions", {
+        method: "POST",
+        body: JSON.stringify({ ...payload, image })
+      });
+      form.reset();
+      state.message = "Leadership position added.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
+    if (action === "update-leadership-position") {
+      const image = await imagePayloadFromInput(form.elements.image);
+      await api(`/api/admin/about/positions/${form.dataset.positionId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ ...payload, image })
+      });
+      state.message = "Leadership position saved.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
+    if (action === "create-about-article") {
+      const image = await imagePayloadFromInput(form.elements.image);
+      await api("/api/admin/about/articles", {
+        method: "POST",
+        body: JSON.stringify({ ...payload, image })
+      });
+      form.reset();
+      state.message = "Public home article published.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
+    if (action === "update-about-article") {
+      const image = await imagePayloadFromInput(form.elements.image);
+      await api(`/api/admin/about/articles/${form.dataset.articleId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ ...payload, image })
+      });
+      state.message = "Public home article saved.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
       return;
     }
 
@@ -2762,7 +3194,9 @@ async function handleClick(event) {
       state.data = null;
       state.admin = null;
       state.adminNotifications = null;
+      state.authMode = "home";
       await loadPublicPaymentDetails();
+      await loadPublicAbout();
       state.message = "";
       state.messageType = "";
       render();
@@ -2977,5 +3411,6 @@ if (state.user) {
   await loadDashboard();
 } else {
   await loadPublicPaymentDetails();
+  await loadPublicAbout();
 }
 render();

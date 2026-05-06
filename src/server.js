@@ -200,6 +200,36 @@ function validateIdentityDocument(document) {
   return { name, type, size, dataUrl };
 }
 
+function validateImageUpload(image) {
+  if (!image || typeof image !== "object" || !String(image.dataUrl || "").trim()) {
+    return { name: "", type: "", size: 0, dataUrl: "" };
+  }
+
+  const name = String(image.name || "").trim();
+  const type = String(image.type || "").trim();
+  const size = Number(image.size || 0);
+  const dataUrl = String(image.dataUrl || "");
+  const acceptedTypes = ["image/jpeg", "image/png", "image/webp"];
+
+  if (!name || !type || !dataUrl) {
+    throw Object.assign(new Error("Image upload is incomplete."), { statusCode: 400 });
+  }
+
+  if (!acceptedTypes.includes(type)) {
+    throw Object.assign(new Error("Image must be a JPG, PNG, or WebP file."), { statusCode: 400 });
+  }
+
+  if (!Number.isFinite(size) || size <= 0 || size > 3_000_000) {
+    throw Object.assign(new Error("Image must be 3 MB or smaller."), { statusCode: 400 });
+  }
+
+  if (!dataUrl.startsWith(`data:${type};base64,`)) {
+    throw Object.assign(new Error("Image upload is not valid."), { statusCode: 400 });
+  }
+
+  return { name, type, size, dataUrl };
+}
+
 function buildFullName(firstName, lastName) {
   return [firstName, lastName].map((part) => String(part || "").trim()).filter(Boolean).join(" ");
 }
@@ -390,6 +420,84 @@ async function listAdminAnnouncements(limit = 100) {
     publishedAt: row.published_at,
     createdAt: row.created_at
   }));
+}
+
+function toLeadershipPosition(row) {
+  return {
+    id: Number(row.id),
+    title: row.title,
+    holderName: row.holder_name || "",
+    body: row.body || "",
+    image: {
+      name: row.image_name || "",
+      type: row.image_type || "",
+      size: Number(row.image_size || 0),
+      dataUrl: row.image_data_url || ""
+    },
+    displayOrder: Number(row.display_order || 0),
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function toPublicAboutArticle(row) {
+  return {
+    id: Number(row.id),
+    title: row.title,
+    body: row.body,
+    image: {
+      name: row.image_name || "",
+      type: row.image_type || "",
+      size: Number(row.image_size || 0),
+      dataUrl: row.image_data_url || ""
+    },
+    displayOrder: Number(row.display_order || 0),
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+async function getAboutContent({ includeHidden = false } = {}) {
+  const about = await query(
+    `
+      SELECT *
+      FROM organization_about
+      WHERE id = 1
+      LIMIT 1
+    `
+  );
+  const positions = await query(
+    `
+      SELECT *
+      FROM leadership_positions
+      WHERE ($1::boolean = true OR status = 'published')
+      ORDER BY display_order ASC, created_at DESC
+      LIMIT 100
+    `,
+    [Boolean(includeHidden)]
+  );
+  const articles = await query(
+    `
+      SELECT *
+      FROM public_about_articles
+      WHERE ($1::boolean = true OR status = 'published')
+      ORDER BY display_order ASC, created_at DESC
+      LIMIT 100
+    `,
+    [Boolean(includeHidden)]
+  );
+
+  const row = about.rows[0] || {};
+  return {
+    summary: row.summary || "",
+    missionStatement: row.mission_statement || "",
+    purpose: row.purpose || "",
+    updatedAt: row.updated_at || null,
+    articles: articles.rows.map(toPublicAboutArticle),
+    positions: positions.rows.map(toLeadershipPosition)
+  };
 }
 
 async function listEvents(limit = 30) {
@@ -958,6 +1066,10 @@ async function handleApi(req, res, url) {
 
   if (method === "GET" && pathname === "/api/payment-details") {
     return sendJson(res, 200, { paymentDetails: await listOrganizationPaymentDetails() });
+  }
+
+  if (method === "GET" && pathname === "/api/about") {
+    return sendJson(res, 200, { about: await getAboutContent() });
   }
 
   if (method === "POST" && pathname === "/api/auth/register") {
@@ -2196,6 +2308,213 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { paymentDetails: await listOrganizationPaymentDetails({ includeDisabled: true }) });
   }
 
+  if (method === "PATCH" && pathname === "/api/admin/about") {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    const payload = await readJson(req);
+    requireFields(payload, ["summary", "purpose"]);
+    const missionStatement = String(payload.missionStatement || "").trim();
+
+    const { rows } = await query(
+      `
+        INSERT INTO organization_about (id, summary, mission_statement, purpose, updated_by, updated_at)
+        VALUES (1, $1, $2, $3, $4, now())
+        ON CONFLICT (id)
+        DO UPDATE SET
+          summary = EXCLUDED.summary,
+          mission_statement = EXCLUDED.mission_statement,
+          purpose = EXCLUDED.purpose,
+          updated_by = EXCLUDED.updated_by,
+          updated_at = now()
+        RETURNING *
+      `,
+      [String(payload.summary).trim(), missionStatement, String(payload.purpose).trim(), admin.id]
+    );
+
+    return sendJson(res, 200, {
+      about: {
+        summary: rows[0].summary,
+        missionStatement: rows[0].mission_statement || "",
+        purpose: rows[0].purpose,
+        updatedAt: rows[0].updated_at
+      }
+    });
+  }
+
+  if (method === "POST" && pathname === "/api/admin/about/positions") {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    const payload = await readJson(req);
+    requireFields(payload, ["title"]);
+    const image = validateImageUpload(payload.image);
+    const displayOrder = Number(payload.displayOrder || 0);
+
+    const { rows } = await query(
+      `
+        INSERT INTO leadership_positions (
+          title,
+          holder_name,
+          body,
+          image_name,
+          image_type,
+          image_size,
+          image_data_url,
+          display_order,
+          status,
+          created_by
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'published', $9)
+        RETURNING *
+      `,
+      [
+        String(payload.title).trim(),
+        String(payload.holderName || "").trim(),
+        String(payload.body || "").trim(),
+        image.name,
+        image.type,
+        image.size,
+        image.dataUrl,
+        Number.isFinite(displayOrder) ? Math.trunc(displayOrder) : 0,
+        admin.id
+      ]
+    );
+
+    return sendJson(res, 201, { position: toLeadershipPosition(rows[0]) });
+  }
+
+  const aboutPositionMatch = pathname.match(/^\/api\/admin\/about\/positions\/(\d+)$/);
+  if (method === "PATCH" && aboutPositionMatch) {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    const positionId = parseId(aboutPositionMatch[1]);
+    const payload = await readJson(req);
+    requireFields(payload, ["title"]);
+    const image = validateImageUpload(payload.image);
+    const displayOrder = Number(payload.displayOrder || 0);
+    const status = payload.status === "hidden" ? "hidden" : "published";
+
+    const { rows } = await query(
+      `
+        UPDATE leadership_positions
+        SET title = $2,
+            holder_name = $3,
+            body = $4,
+            image_name = CASE WHEN $5 <> '' THEN $5 ELSE image_name END,
+            image_type = CASE WHEN $5 <> '' THEN $6 ELSE image_type END,
+            image_size = CASE WHEN $5 <> '' THEN $7 ELSE image_size END,
+            image_data_url = CASE WHEN $5 <> '' THEN $8 ELSE image_data_url END,
+            display_order = $9,
+            status = $10,
+            updated_at = now()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [
+        positionId,
+        String(payload.title).trim(),
+        String(payload.holderName || "").trim(),
+        String(payload.body || "").trim(),
+        image.name,
+        image.type,
+        image.size,
+        image.dataUrl,
+        Number.isFinite(displayOrder) ? Math.trunc(displayOrder) : 0,
+        status
+      ]
+    );
+
+    if (rows.length === 0) {
+      return sendError(res, 404, "Leadership position not found.");
+    }
+
+    return sendJson(res, 200, { position: toLeadershipPosition(rows[0]) });
+  }
+
+  if (method === "POST" && pathname === "/api/admin/about/articles") {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    const payload = await readJson(req);
+    requireFields(payload, ["title", "body"]);
+    const image = validateImageUpload(payload.image);
+    const displayOrder = Number(payload.displayOrder || 0);
+
+    const { rows } = await query(
+      `
+        INSERT INTO public_about_articles (
+          title,
+          body,
+          image_name,
+          image_type,
+          image_size,
+          image_data_url,
+          display_order,
+          status,
+          created_by
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, 'published', $8)
+        RETURNING *
+      `,
+      [
+        String(payload.title).trim(),
+        String(payload.body).trim(),
+        image.name,
+        image.type,
+        image.size,
+        image.dataUrl,
+        Number.isFinite(displayOrder) ? Math.trunc(displayOrder) : 0,
+        admin.id
+      ]
+    );
+
+    return sendJson(res, 201, { article: toPublicAboutArticle(rows[0]) });
+  }
+
+  const aboutArticleMatch = pathname.match(/^\/api\/admin\/about\/articles\/(\d+)$/);
+  if (method === "PATCH" && aboutArticleMatch) {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    const articleId = parseId(aboutArticleMatch[1]);
+    const payload = await readJson(req);
+    requireFields(payload, ["title", "body"]);
+    const image = validateImageUpload(payload.image);
+    const displayOrder = Number(payload.displayOrder || 0);
+    const status = payload.status === "hidden" ? "hidden" : "published";
+
+    const { rows } = await query(
+      `
+        UPDATE public_about_articles
+        SET title = $2,
+            body = $3,
+            image_name = CASE WHEN $4 <> '' THEN $4 ELSE image_name END,
+            image_type = CASE WHEN $4 <> '' THEN $5 ELSE image_type END,
+            image_size = CASE WHEN $4 <> '' THEN $6 ELSE image_size END,
+            image_data_url = CASE WHEN $4 <> '' THEN $7 ELSE image_data_url END,
+            display_order = $8,
+            status = $9,
+            updated_at = now()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [
+        articleId,
+        String(payload.title).trim(),
+        String(payload.body).trim(),
+        image.name,
+        image.type,
+        image.size,
+        image.dataUrl,
+        Number.isFinite(displayOrder) ? Math.trunc(displayOrder) : 0,
+        status
+      ]
+    );
+
+    if (rows.length === 0) {
+      return sendError(res, 404, "Public article not found.");
+    }
+
+    return sendJson(res, 200, { article: toPublicAboutArticle(rows[0]) });
+  }
+
   const paymentDetailMatch = pathname.match(/^\/api\/admin\/payment-details\/([a-z_]+)$/);
   if ((method === "PATCH" || method === "PUT") && paymentDetailMatch) {
     const admin = await requireAdmin(req, res);
@@ -2259,7 +2578,7 @@ async function handleApi(req, res, url) {
   if (method === "GET" && pathname === "/api/admin/summary") {
     const admin = await requireAdmin(req, res);
     if (!admin) return;
-    const [members, questions, payments, ballots, announcements, events, expenditures, financialSummary, paymentDetails] = await Promise.all([
+    const [members, questions, payments, ballots, announcements, events, expenditures, financialSummary, paymentDetails, about] = await Promise.all([
       listMembers(),
       listQuestions({ includePending: true }),
       listPayments(admin, { includeAll: true }),
@@ -2268,9 +2587,10 @@ async function handleApi(req, res, url) {
       listAdminEvents(),
       listExpenditures(),
       getFinancialSummary(),
-      listOrganizationPaymentDetails({ includeDisabled: true })
+      listOrganizationPaymentDetails({ includeDisabled: true }),
+      getAboutContent({ includeHidden: true })
     ]);
-    return sendJson(res, 200, { members, questions, payments, ballots, announcements, events, expenditures, financialSummary, paymentDetails });
+    return sendJson(res, 200, { members, questions, payments, ballots, announcements, events, expenditures, financialSummary, paymentDetails, about });
   }
 
   return sendError(res, 404, "API route not found.");

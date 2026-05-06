@@ -72,6 +72,126 @@ a {
   margin-bottom: 14px;
 }
 
+.public-layout {
+  min-height: 100vh;
+  display: grid;
+  align-content: start;
+  gap: 22px;
+  padding: 20px;
+}
+
+.public-topbar,
+.public-hero,
+.public-section,
+.public-action-layout,
+.public-content-panel {
+  width: min(1120px, 100%);
+  margin: 0 auto;
+}
+
+.public-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.public-brand-link {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  font-weight: 800;
+}
+
+.public-brand-link img {
+  width: 40px;
+  height: 40px;
+}
+
+.public-menu {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.public-hero {
+  min-height: 300px;
+  display: grid;
+  align-items: end;
+  padding: 44px;
+  border-radius: 8px;
+  background: #0f172a;
+  color: white;
+  box-shadow: var(--shadow);
+}
+
+.public-hero img {
+  width: 92px;
+  height: 92px;
+}
+
+.public-hero h1 {
+  margin: 24px 0 10px;
+  font-size: clamp(2.4rem, 8vw, 5rem);
+  line-height: 0.95;
+  letter-spacing: 0;
+}
+
+.public-hero p,
+.public-intro p {
+  max-width: 58ch;
+  color: #d7dee9;
+}
+
+.public-section,
+.public-content-panel,
+.public-form-card,
+.public-intro {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+
+.public-section,
+.public-content-panel,
+.public-form-card {
+  padding: 24px;
+}
+
+.public-content-panel {
+  max-width: 960px;
+}
+
+.public-action-layout {
+  max-width: 980px;
+  display: grid;
+  grid-template-columns: minmax(240px, 0.85fr) minmax(340px, 1.15fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.public-intro {
+  padding: 28px;
+  background: #111827;
+  color: white;
+}
+
+.public-intro h1,
+.public-content-panel > h2,
+.public-section h2,
+.public-form-card h2 {
+  margin-top: 0;
+}
+
 .auth-panel {
   width: min(980px, 100%);
   display: grid;
@@ -431,6 +551,86 @@ a {
   overflow-wrap: anywhere;
 }
 
+.about-public,
+.leadership-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.leadership-grid {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.leadership-card {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+  overflow: hidden;
+}
+
+.public-article-card {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.35fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+  padding: 12px;
+}
+
+.public-article-card img {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border-radius: 8px;
+}
+
+.public-article-card.without-image {
+  grid-template-columns: 1fr;
+}
+
+.public-article-card h4,
+.public-article-card p {
+  margin: 0 0 8px;
+}
+
+.leadership-card img,
+.leadership-placeholder {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  background: #e9edf3;
+}
+
+.leadership-placeholder {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 2rem;
+  font-weight: 800;
+}
+
+.leadership-card > div {
+  padding: 0 12px 12px;
+}
+
+.leadership-card h4,
+.leadership-card p {
+  margin: 0;
+}
+
+.leadership-thumb {
+  width: 100%;
+  max-width: 220px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+}
+
 .item-card {
   padding: 14px;
 }
@@ -671,6 +871,7 @@ th {
   }
 
   .two-column,
+  .public-action-layout,
   .auth-panel {
     grid-template-columns: 1fr;
   }
@@ -688,6 +889,12 @@ th {
   .main-panel,
   .auth-form-panel,
   .auth-brand,
+  .public-layout,
+  .public-hero,
+  .public-section,
+  .public-content-panel,
+  .public-form-card,
+  .public-intro,
   .sidebar {
     padding: 18px;
   }
@@ -700,6 +907,10 @@ th {
   .form-grid,
   .metric-grid,
   .side-nav {
+    grid-template-columns: 1fr;
+  }
+
+  .public-article-card {
     grid-template-columns: 1fr;
   }
 }

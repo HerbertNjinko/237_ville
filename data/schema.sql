@@ -78,6 +78,82 @@ CREATE TABLE IF NOT EXISTS announcements (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS organization_about (
+  id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  summary TEXT NOT NULL DEFAULT '',
+  mission_statement TEXT NOT NULL DEFAULT '',
+  purpose TEXT NOT NULL DEFAULT '',
+  updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE organization_about ADD COLUMN IF NOT EXISTS mission_statement TEXT NOT NULL DEFAULT '';
+
+INSERT INTO organization_about (id, summary, mission_statement, purpose)
+VALUES (
+  1,
+  '237 Ville is a community organization focused on keeping members informed, connected, and involved.',
+  'Our mission is to build a connected, transparent, and active community where members can participate in decisions and support one another.',
+  'Our purpose is to support community participation, transparent leadership, member engagement, and shared decision-making.'
+)
+ON CONFLICT (id) DO NOTHING;
+
+UPDATE organization_about
+SET mission_statement = 'Our mission is to build a connected, transparent, and active community where members can participate in decisions and support one another.'
+WHERE mission_statement = '';
+
+CREATE TABLE IF NOT EXISTS leadership_positions (
+  id BIGSERIAL PRIMARY KEY,
+  title TEXT NOT NULL,
+  holder_name TEXT NOT NULL DEFAULT '',
+  body TEXT DEFAULT '',
+  image_name TEXT DEFAULT '',
+  image_type TEXT DEFAULT '',
+  image_size INTEGER DEFAULT 0,
+  image_data_url TEXT DEFAULT '',
+  display_order INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'published' CHECK (status IN ('published', 'hidden')),
+  created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE leadership_positions ADD COLUMN IF NOT EXISTS holder_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE leadership_positions ADD COLUMN IF NOT EXISTS body TEXT DEFAULT '';
+ALTER TABLE leadership_positions ADD COLUMN IF NOT EXISTS image_name TEXT DEFAULT '';
+ALTER TABLE leadership_positions ADD COLUMN IF NOT EXISTS image_type TEXT DEFAULT '';
+ALTER TABLE leadership_positions ADD COLUMN IF NOT EXISTS image_size INTEGER DEFAULT 0;
+ALTER TABLE leadership_positions ADD COLUMN IF NOT EXISTS image_data_url TEXT DEFAULT '';
+ALTER TABLE leadership_positions ADD COLUMN IF NOT EXISTS display_order INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE leadership_positions ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'published';
+ALTER TABLE leadership_positions DROP CONSTRAINT IF EXISTS leadership_positions_status_check;
+ALTER TABLE leadership_positions ADD CONSTRAINT leadership_positions_status_check CHECK (status IN ('published', 'hidden'));
+
+CREATE TABLE IF NOT EXISTS public_about_articles (
+  id BIGSERIAL PRIMARY KEY,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  image_name TEXT DEFAULT '',
+  image_type TEXT DEFAULT '',
+  image_size INTEGER DEFAULT 0,
+  image_data_url TEXT DEFAULT '',
+  display_order INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'published' CHECK (status IN ('published', 'hidden')),
+  created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE public_about_articles ADD COLUMN IF NOT EXISTS image_name TEXT DEFAULT '';
+ALTER TABLE public_about_articles ADD COLUMN IF NOT EXISTS image_type TEXT DEFAULT '';
+ALTER TABLE public_about_articles ADD COLUMN IF NOT EXISTS image_size INTEGER DEFAULT 0;
+ALTER TABLE public_about_articles ADD COLUMN IF NOT EXISTS image_data_url TEXT DEFAULT '';
+ALTER TABLE public_about_articles ADD COLUMN IF NOT EXISTS display_order INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE public_about_articles ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'published';
+ALTER TABLE public_about_articles DROP CONSTRAINT IF EXISTS public_about_articles_status_check;
+ALTER TABLE public_about_articles ADD CONSTRAINT public_about_articles_status_check CHECK (status IN ('published', 'hidden'));
+
 CREATE TABLE IF NOT EXISTS events (
   id BIGSERIAL PRIMARY KEY,
   title TEXT NOT NULL,
@@ -265,6 +341,8 @@ CREATE TABLE IF NOT EXISTS notifications (
 
 CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
 CREATE INDEX IF NOT EXISTS idx_announcements_status_published ON announcements(status, published_at DESC);
+CREATE INDEX IF NOT EXISTS idx_leadership_status_order ON leadership_positions(status, display_order, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_public_about_articles_status_order ON public_about_articles(status, display_order, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_events_starts_at ON events(starts_at);
 CREATE INDEX IF NOT EXISTS idx_questions_status_created ON member_questions(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_ballots_status_created ON ballots(status, created_at DESC);
