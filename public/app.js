@@ -169,11 +169,15 @@ function downloadCsv(filename, rows) {
 }
 
 function statusPill(status) {
-  return `<span class="status-pill ${escapeHtml(status)}">${escapeHtml(status)}</span>`;
+  return `<span class="status-pill ${escapeHtml(status)}">${escapeHtml(statusLabel(status))}</span>`;
 }
 
 function emptyState(text) {
   return `<div class="empty-state">${escapeHtml(text)}</div>`;
+}
+
+function statusLabel(status = "") {
+  return String(status).replaceAll("_", " ");
 }
 
 async function api(path, options = {}) {
@@ -2249,7 +2253,7 @@ function socialTaskOptions(selected = "food") {
 
 function socialStatusOptions(statuses, selected) {
   return statuses
-    .map((status) => `<option value="${status}" ${selected === status ? "selected" : ""}>${status}</option>`)
+    .map((status) => `<option value="${status}" ${selected === status ? "selected" : ""}>${escapeHtml(statusLabel(status))}</option>`)
     .join("");
 }
 
@@ -2294,9 +2298,10 @@ function renderAdminSocialCoordinator() {
   const loading = requireAdminData("Loading social coordinator...");
   if (loading) return loading;
 
-  const social = state.admin.social || { meetings: [], resources: [], resourceRequests: [], fundRequests: [] };
+  const social = state.admin.social || { meetings: [], resources: [], resourceRequests: [], resourceAdjustments: [], fundRequests: [] };
   const assignments = flattenSocialAssignments(social.meetings || []);
   const pendingRequests = (social.resourceRequests || []).filter((request) => request.status === "pending");
+  const checkedOutRequests = (social.resourceRequests || []).filter((request) => request.status === "delivered");
   const pendingFundRequests = (social.fundRequests || []).filter((request) => request.status === "pending");
   const currentMeetings = (social.meetings || []).filter((meeting) => meeting.status !== "completed" && meeting.status !== "cancelled");
   const checkedOutResources = (social.resources || []).reduce(
@@ -2311,9 +2316,10 @@ function renderAdminSocialCoordinator() {
         <div class="metric"><span>Open meetings</span><strong>${currentMeetings.length}</strong></div>
         <div class="metric"><span>Assignments</span><strong>${assignments.length}</strong></div>
         <div class="metric"><span>Pending requests</span><strong>${pendingRequests.length}</strong></div>
+        <div class="metric"><span>Checked out</span><strong>${checkedOutRequests.length}</strong></div>
         <div class="metric"><span>Pending funds</span><strong>${pendingFundRequests.length}</strong></div>
         <div class="metric"><span>Resources</span><strong>${(social.resources || []).length}</strong></div>
-        <div class="metric"><span>Checked out</span><strong>${checkedOutResources}</strong></div>
+        <div class="metric"><span>Out quantity</span><strong>${checkedOutResources}</strong></div>
       </div>
       ${renderAdminSocialTabs()}
       ${renderAdminSocialSection(social, assignments)}
@@ -2327,6 +2333,7 @@ function renderAdminSocialTabs() {
     ["assignments", "Assignments"],
     ["funds", "Fund requests"],
     ["resources", "Resources"],
+    ["checked-out", "Checked out"],
     ["requests", "Resource requests"]
   ];
 
@@ -2352,7 +2359,9 @@ function renderAdminSocialSection(social, assignments) {
     case "funds":
       return renderAdminSocialFundRequestsSection(social.fundRequests || []);
     case "resources":
-      return renderAdminSocialResourcesSection(social.resources || []);
+      return renderAdminSocialResourcesSection(social.resources || [], social.resourceAdjustments || []);
+    case "checked-out":
+      return renderAdminSocialCheckedOutSection(social.resourceRequests || []);
     case "requests":
       return renderAdminSocialRequestsSection(social.resourceRequests || []);
     default:
@@ -2410,7 +2419,7 @@ function renderAdminSocialAssignmentsSection(social, assignments) {
   `;
 }
 
-function renderAdminSocialResourcesSection(resources) {
+function renderAdminSocialResourcesSection(resources, adjustments = []) {
   return `
     <section class="two-column">
       <div class="panel">
@@ -2430,6 +2439,43 @@ function renderAdminSocialResourcesSection(resources) {
           </div>
         </div>
         ${renderSocialResourceCreateForm()}
+        <div class="social-subsection">
+          <div class="panel-header">
+            <div>
+              <h3>Inventory adjustments</h3>
+              <p>Recent purchases and destroyed resource records.</p>
+            </div>
+          </div>
+          ${renderSocialResourceAdjustments(adjustments)}
+        </div>
+      </aside>
+    </section>
+  `;
+}
+
+function renderAdminSocialCheckedOutSection(requests) {
+  const delivered = requests.filter((request) => request.status === "delivered");
+  const reserved = requests.filter((request) => request.status === "approved");
+
+  return `
+    <section class="two-column">
+      <div class="panel">
+        <div class="panel-header">
+          <div>
+            <h3>Checked out resources</h3>
+            <p>Resources currently in member possession.</p>
+          </div>
+        </div>
+        ${renderAdminCheckedOutResourceRequests(delivered)}
+      </div>
+      <aside class="panel">
+        <div class="panel-header">
+          <div>
+            <h3>Approved for pickup</h3>
+            <p>Mark delivered after the member picks up the approved resource.</p>
+          </div>
+        </div>
+        ${renderAdminCheckedOutResourceRequests(reserved)}
       </aside>
     </section>
   `;
@@ -2473,7 +2519,7 @@ function renderAdminSocialRequestsSection(requests) {
         <div class="panel-header">
           <div>
             <h3>Pending resource requests</h3>
-            <p>Approve, decline, or mark requested resources returned.</p>
+            <p>Approve resource reservations before members pick them up.</p>
           </div>
         </div>
         ${renderAdminSocialResourceRequests(pending)}
@@ -2482,7 +2528,7 @@ function renderAdminSocialRequestsSection(requests) {
         <div class="panel-header">
           <div>
             <h3>Request history</h3>
-            <p>Reviewed resource requests remain available for follow-up.</p>
+            <p>Approved, delivered, checked in, and declined requests remain available for follow-up.</p>
           </div>
         </div>
         ${renderAdminSocialResourceRequests(reviewed)}
@@ -2742,8 +2788,25 @@ function renderSocialResourceList(resources) {
                   <span>Add purchased quantity</span>
                   <input name="quantity" type="number" min="1" step="1" value="1" required>
                 </label>
+                <label class="field">
+                  <span>Purchase note</span>
+                  <input name="note" placeholder="Optional receipt or purchase note">
+                </label>
                 <div class="filter-actions">
                   <button class="primary-button" type="submit">Add quantity</button>
+                </div>
+              </form>
+              <form class="form-grid resource-stock-form danger-form" data-action="destroy-social-resource-stock" data-resource-id="${resource.id}">
+                <label class="field">
+                  <span>Destroyed quantity</span>
+                  <input name="quantity" type="number" min="1" max="${resource.availableQuantity}" step="1" value="1" required>
+                </label>
+                <label class="field">
+                  <span>Reason</span>
+                  <input name="note" placeholder="Broken, lost, unsafe, etc." required>
+                </label>
+                <div class="filter-actions">
+                  <button class="secondary-button danger-button" type="submit" ${Number(resource.availableQuantity || 0) < 1 ? "disabled" : ""}>Mark destroyed</button>
                 </div>
               </form>
               <form class="form-stack" data-action="update-social-resource" data-resource-id="${resource.id}">
@@ -2778,6 +2841,71 @@ function renderSocialResourceList(resources) {
             </article>
           `;
           }
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderSocialResourceAdjustments(adjustments) {
+  if (!adjustments.length) return emptyState("No inventory adjustments recorded yet.");
+
+  return `
+    <div class="item-list compact-list">
+      ${adjustments
+        .map(
+          (adjustment) => `
+            <div class="comment">
+              <strong>${escapeHtml(adjustment.resourceName)} · ${escapeHtml(statusLabel(adjustment.adjustmentType))} ${adjustment.quantity}</strong>
+              <p>${escapeHtml(adjustment.note || "")}</p>
+              <div class="item-meta">
+                ${adjustment.adjustedByName ? `<span>${escapeHtml(adjustment.adjustedByName)}</span>` : ""}
+                <span>${formatDate(adjustment.createdAt)}</span>
+              </div>
+            </div>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderAdminCheckedOutResourceRequests(requests) {
+  if (!requests.length) return emptyState("No resources match this status.");
+
+  return `
+    <div class="item-list">
+      ${requests
+        .map(
+          (request) => `
+            <article class="item-card">
+              <div class="panel-header">
+                <div>
+                  <h4>${escapeHtml(request.resourceName)}</h4>
+                  <p>${escapeHtml(request.requesterName)} has ${request.quantity}${request.meetingTitle ? ` for ${escapeHtml(request.meetingTitle)}` : ""}</p>
+                </div>
+                ${statusPill(request.status)}
+              </div>
+              <div class="item-meta">
+                ${request.deliveredAt ? `<span>Delivered ${formatDate(request.deliveredAt)}</span>` : ""}
+                ${request.neededDate ? `<span>Needed ${formatDate(request.neededDate, { dateOnly: true })}</span>` : ""}
+                ${request.returnDate ? `<span>Expected return ${formatDate(request.returnDate, { dateOnly: true })}</span>` : ""}
+              </div>
+              ${request.note ? `<p>${escapeHtml(request.note)}</p>` : ""}
+              <div class="actions">
+                ${
+                  request.status === "approved"
+                    ? `<button class="secondary-button" data-click="resource-request-status" data-request-id="${request.id}" data-status="delivered" type="button">Mark delivered</button>`
+                    : ""
+                }
+                ${
+                  request.status === "delivered"
+                    ? `<button class="primary-button" data-click="resource-request-status" data-request-id="${request.id}" data-status="checked_in" type="button">Mark checked in</button>`
+                    : ""
+                }
+              </div>
+            </article>
+          `
         )
         .join("")}
     </div>
@@ -2844,13 +2972,15 @@ function renderAdminSocialResourceRequests(requests) {
               <div class="item-meta">
                 ${request.neededDate ? `<span>Needed ${formatDate(request.neededDate, { dateOnly: true })}</span>` : ""}
                 ${request.returnDate ? `<span>Return ${formatDate(request.returnDate, { dateOnly: true })}</span>` : ""}
+                ${request.deliveredAt ? `<span>Delivered ${formatDate(request.deliveredAt)}</span>` : ""}
+                ${request.checkedInAt ? `<span>Checked in ${formatDate(request.checkedInAt)}</span>` : ""}
                 <span>${formatDate(request.createdAt)}</span>
               </div>
               ${request.note ? `<p>${escapeHtml(request.note)}</p>` : ""}
               <form class="form-stack compact-form" data-action="update-social-resource-request" data-request-id="${request.id}">
                 <label class="field">
                   <span>Status</span>
-                  <select name="status">${socialStatusOptions(["pending", "approved", "declined", "returned"], request.status)}</select>
+                  <select name="status">${socialStatusOptions(["pending", "approved", "delivered", "checked_in", "declined"], request.status)}</select>
                 </label>
                 <label class="field">
                   <span>Admin note</span>
@@ -2858,6 +2988,18 @@ function renderAdminSocialResourceRequests(requests) {
                 </label>
                 <button class="secondary-button" type="submit">Update request</button>
               </form>
+              <div class="actions">
+                ${
+                  request.status === "approved"
+                    ? `<button class="secondary-button" data-click="resource-request-status" data-request-id="${request.id}" data-status="delivered" type="button">Mark delivered</button>`
+                    : ""
+                }
+                ${
+                  request.status === "delivered"
+                    ? `<button class="primary-button" data-click="resource-request-status" data-request-id="${request.id}" data-status="checked_in" type="button">Mark checked in</button>`
+                    : ""
+                }
+              </div>
             </article>
           `
         )
@@ -3185,6 +3327,8 @@ function renderMemberResourceRequests(requests) {
               <div class="item-meta">
                 ${request.neededDate ? `<span>Needed ${formatDate(request.neededDate, { dateOnly: true })}</span>` : ""}
                 ${request.returnDate ? `<span>Return ${formatDate(request.returnDate, { dateOnly: true })}</span>` : ""}
+                ${request.deliveredAt ? `<span>Delivered ${formatDate(request.deliveredAt)}</span>` : ""}
+                ${request.checkedInAt ? `<span>Checked in ${formatDate(request.checkedInAt)}</span>` : ""}
               </div>
               ${request.note ? `<p>${escapeHtml(request.note)}</p>` : ""}
               ${request.adminNote ? `<p class="muted">${escapeHtml(request.adminNote)}</p>` : ""}
@@ -4355,6 +4499,19 @@ async function handleSubmit(event) {
       return;
     }
 
+    if (action === "destroy-social-resource-stock") {
+      payload.quantity = Number(payload.quantity || 0);
+      await api(`/api/admin/social/resources/${form.dataset.resourceId}/destroyed`, {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      form.reset();
+      state.message = "Destroyed resource quantity recorded.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
     if (action === "update-social-resource") {
       await api(`/api/admin/social/resources/${form.dataset.resourceId}`, {
         method: "PATCH",
@@ -4819,6 +4976,17 @@ async function handleClick(event) {
         body: "{}"
       });
       state.message = "Social meeting assignments published as an announcement.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
+    if (action === "resource-request-status") {
+      await api(`/api/admin/social/resource-requests/${button.dataset.requestId}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: button.dataset.status })
+      });
+      state.message = button.dataset.status === "delivered" ? "Resource marked delivered." : "Resource marked checked in.";
       state.messageType = "ok";
       await refreshAll({ includeAdmin: true });
       return;

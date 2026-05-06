@@ -750,6 +750,11 @@ a {
   background: var(--paper);
 }
 
+.resource-stock-form.danger-form {
+  border-color: #efc8c5;
+  background: var(--soft-red);
+}
+
 .compact-card {
   padding: 12px;
   background: #fbfcfd;

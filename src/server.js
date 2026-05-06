@@ -1125,7 +1125,12 @@ function normalizeResourceStatus(value) {
 }
 
 function normalizeResourceRequestStatus(value) {
-  return ["approved", "declined", "returned"].includes(value) ? value : "pending";
+  if (value === "returned") return "checked_in";
+  return ["approved", "delivered", "checked_in", "declined"].includes(value) ? value : "pending";
+}
+
+function resourceRequestReservesInventory(status) {
+  return ["approved", "delivered"].includes(status);
 }
 
 function normalizeFundRequestStatus(value) {
@@ -1143,6 +1148,20 @@ function toSocialResource(row) {
     status: row.status,
     createdAt: row.created_at,
     updatedAt: row.updated_at
+  };
+}
+
+function toSocialResourceAdjustment(row) {
+  return {
+    id: Number(row.id),
+    resourceId: Number(row.resource_id),
+    resourceName: row.resource_name || "",
+    adjustmentType: row.adjustment_type,
+    quantity: Number(row.quantity || 0),
+    note: row.note || "",
+    adjustedBy: row.adjusted_by ? Number(row.adjusted_by) : null,
+    adjustedByName: row.adjusted_by_name || "",
+    createdAt: row.created_at
   };
 }
 
@@ -1188,6 +1207,8 @@ function toSocialFundRequest(row) {
     adminNote: row.admin_note || "",
     reviewedBy: row.reviewed_by ? Number(row.reviewed_by) : null,
     reviewedAt: row.reviewed_at,
+    deliveredAt: row.delivered_at,
+    checkedInAt: row.checked_in_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -1255,6 +1276,20 @@ async function listSocialCoordinator(user, { includeAll = false } = {}) {
     `,
     [Boolean(includeAll)]
   );
+  const adjustmentsResult = includeAll
+    ? await query(
+        `
+          SELECT social_resource_adjustments.*,
+                 social_resources.name AS resource_name,
+                 users.full_name AS adjusted_by_name
+          FROM social_resource_adjustments
+          JOIN social_resources ON social_resources.id = social_resource_adjustments.resource_id
+          LEFT JOIN users ON users.id = social_resource_adjustments.adjusted_by
+          ORDER BY social_resource_adjustments.created_at DESC
+          LIMIT 150
+        `
+      )
+    : { rows: [] };
   const assignmentsResult = await query(
     `
       SELECT social_assignments.*, users.full_name AS member_name, users.email AS member_email
@@ -1347,6 +1382,7 @@ async function listSocialCoordinator(user, { includeAll = false } = {}) {
   return {
     meetings: meetingsResult.rows.map((row) => toSocialMeeting(row, assignments, requests)),
     resources: resourcesResult.rows.map(toSocialResource),
+    resourceAdjustments: adjustmentsResult.rows.map(toSocialResourceAdjustment),
     resourceRequests: requests,
     fundRequests
   };
@@ -1432,10 +1468,16 @@ function buildSocialAnnouncementBody(meeting, assignments, requests) {
       })
     : ["- No assignments have been added yet."];
 
-  const requestLines = requests.filter((request) => request.status === "approved").length
+  const activeResourceRequests = requests.filter((request) => ["approved", "delivered"].includes(request.status));
+  const requestLines = activeResourceRequests.length
     ? requests
-        .filter((request) => request.status === "approved")
-        .map((request) => `- ${request.resource_name}: ${request.quantity} approved for ${request.requester_name}`)
+        .filter((request) => ["approved", "delivered"].includes(request.status))
+        .map((request) => {
+          const resourceName = request.resourceName || request.resource_name;
+          const requesterName = request.requesterName || request.requester_name;
+          const statusLabel = request.status === "delivered" ? "delivered to" : "approved for";
+          return `- ${resourceName}: ${request.quantity} ${statusLabel} ${requesterName}`;
+        })
     : ["- No approved resource requests yet."];
 
   return [
@@ -1726,7 +1768,7 @@ async function handleApi(req, res, url) {
         events: [],
         questions: [],
         ballots: [],
-        social: { meetings: [], resources: [], resourceRequests: [], fundRequests: [] },
+        social: { meetings: [], resources: [], resourceAdjustments: [], resourceRequests: [], fundRequests: [] },
         financials: { donations: [], expenditures: [], summary: { donationTotalCents: 0, expenditureTotalCents: 0, publishedNetCents: 0 } }
       });
     }
@@ -2484,28 +2526,98 @@ async function handleApi(req, res, url) {
     const resourceId = parseId(socialResourceStockMatch[1]);
     const payload = await readJson(req);
     const quantity = Math.trunc(Number(payload.quantity || 0));
+    const note = String(payload.note || "").trim();
 
     if (quantity < 1) {
       return sendError(res, 400, "Enter a quantity of at least 1.");
     }
 
-    const { rows } = await query(
-      `
-        UPDATE social_resources
-        SET total_quantity = total_quantity + $2,
-            available_quantity = available_quantity + $2,
-            updated_at = now()
-        WHERE id = $1
-        RETURNING *
-      `,
-      [resourceId, quantity]
-    );
+    const resource = await withTransaction(async (client) => {
+      const { rows } = await client.query(
+        `
+          UPDATE social_resources
+          SET total_quantity = total_quantity + $2,
+              available_quantity = available_quantity + $2,
+              updated_at = now()
+          WHERE id = $1
+          RETURNING *
+        `,
+        [resourceId, quantity]
+      );
 
-    if (rows.length === 0) {
-      return sendError(res, 404, "Resource not found.");
+      if (rows.length === 0) {
+        throw Object.assign(new Error("Resource not found."), { statusCode: 404 });
+      }
+
+      await client.query(
+        `
+          INSERT INTO social_resource_adjustments (resource_id, adjustment_type, quantity, note, adjusted_by)
+          VALUES ($1, 'purchase', $2, $3, $4)
+        `,
+        [resourceId, quantity, note, admin.id]
+      );
+
+      return rows[0];
+    });
+
+    return sendJson(res, 200, { resource: toSocialResource(resource) });
+  }
+
+  const socialResourceDestroyedMatch = pathname.match(/^\/api\/admin\/social\/resources\/(\d+)\/destroyed$/);
+  if (method === "POST" && socialResourceDestroyedMatch) {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    const resourceId = parseId(socialResourceDestroyedMatch[1]);
+    const payload = await readJson(req);
+    const quantity = Math.trunc(Number(payload.quantity || 0));
+    const note = String(payload.note || "").trim();
+
+    if (quantity < 1) {
+      return sendError(res, 400, "Enter a destroyed quantity of at least 1.");
+    }
+    if (!note) {
+      return sendError(res, 400, "Enter a note explaining why the resource was marked destroyed.");
     }
 
-    return sendJson(res, 200, { resource: toSocialResource(rows[0]) });
+    const resource = await withTransaction(async (client) => {
+      const currentResult = await client.query(
+        "SELECT * FROM social_resources WHERE id = $1 FOR UPDATE",
+        [resourceId]
+      );
+      const current = currentResult.rows[0];
+      if (!current) {
+        throw Object.assign(new Error("Resource not found."), { statusCode: 404 });
+      }
+      if (Number(current.available_quantity) < quantity) {
+        throw Object.assign(new Error("Destroyed quantity cannot be greater than available quantity. Check in returned items first."), {
+          statusCode: 400
+        });
+      }
+
+      const { rows } = await client.query(
+        `
+          UPDATE social_resources
+          SET total_quantity = total_quantity - $2,
+              available_quantity = available_quantity - $2,
+              updated_at = now()
+          WHERE id = $1
+          RETURNING *
+        `,
+        [resourceId, quantity]
+      );
+
+      await client.query(
+        `
+          INSERT INTO social_resource_adjustments (resource_id, adjustment_type, quantity, note, adjusted_by)
+          VALUES ($1, 'destroyed', $2, $3, $4)
+        `,
+        [resourceId, quantity, note, admin.id]
+      );
+
+      return rows[0];
+    });
+
+    return sendJson(res, 200, { resource: toSocialResource(resource) });
   }
 
   if (method === "POST" && pathname === "/api/social/resource-requests") {
@@ -2597,18 +2709,21 @@ async function handleApi(req, res, url) {
         throw Object.assign(new Error("Resource request not found."), { statusCode: 404 });
       }
 
-      if (status === "approved" && current.status !== "approved" && Number(current.available_quantity) < Number(current.quantity)) {
+      const currentReservesInventory = resourceRequestReservesInventory(current.status);
+      const nextReservesInventory = resourceRequestReservesInventory(status);
+
+      if (nextReservesInventory && !currentReservesInventory && Number(current.available_quantity) < Number(current.quantity)) {
         throw Object.assign(new Error("Not enough available resource quantity to approve this request."), { statusCode: 400 });
       }
 
-      if (status === "approved" && current.status !== "approved") {
+      if (nextReservesInventory && !currentReservesInventory) {
         await client.query(
           "UPDATE social_resources SET available_quantity = available_quantity - $2, updated_at = now() WHERE id = $1",
           [current.resource_id, current.quantity]
         );
       }
 
-      if ((status === "declined" || status === "returned") && current.status === "approved") {
+      if (!nextReservesInventory && currentReservesInventory) {
         await client.query(
           "UPDATE social_resources SET available_quantity = available_quantity + $2, updated_at = now() WHERE id = $1",
           [current.resource_id, current.quantity]
@@ -2622,6 +2737,8 @@ async function handleApi(req, res, url) {
               admin_note = $3,
               reviewed_by = $4,
               reviewed_at = now(),
+              delivered_at = CASE WHEN $2 = 'delivered' THEN COALESCE(delivered_at, now()) ELSE delivered_at END,
+              checked_in_at = CASE WHEN $2 = 'checked_in' THEN now() ELSE checked_in_at END,
               updated_at = now()
           WHERE id = $1
           RETURNING *
@@ -2636,7 +2753,7 @@ async function handleApi(req, res, url) {
       result.request.requested_by,
       "social_resource_request",
       "Resource request updated",
-      `Your request for ${result.previous.resource_name} was marked ${status}.`,
+      `Your request for ${result.previous.resource_name} was marked ${status.replaceAll("_", " ")}.`,
       "/social"
     );
 

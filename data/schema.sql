@@ -427,11 +427,13 @@ CREATE TABLE IF NOT EXISTS social_resource_requests (
   quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity > 0),
   needed_date DATE,
   return_date DATE,
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'declined', 'returned')),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'delivered', 'checked_in', 'declined', 'returned')),
   note TEXT DEFAULT '',
   admin_note TEXT DEFAULT '',
   reviewed_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
   reviewed_at TIMESTAMPTZ,
+  delivered_at TIMESTAMPTZ,
+  checked_in_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -443,10 +445,29 @@ ALTER TABLE social_resource_requests ADD COLUMN IF NOT EXISTS note TEXT DEFAULT 
 ALTER TABLE social_resource_requests ADD COLUMN IF NOT EXISTS admin_note TEXT DEFAULT '';
 ALTER TABLE social_resource_requests ADD COLUMN IF NOT EXISTS reviewed_by BIGINT REFERENCES users(id) ON DELETE SET NULL;
 ALTER TABLE social_resource_requests ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
+ALTER TABLE social_resource_requests ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMPTZ;
+ALTER TABLE social_resource_requests ADD COLUMN IF NOT EXISTS checked_in_at TIMESTAMPTZ;
 ALTER TABLE social_resource_requests DROP CONSTRAINT IF EXISTS social_resource_requests_quantity_check;
 ALTER TABLE social_resource_requests ADD CONSTRAINT social_resource_requests_quantity_check CHECK (quantity > 0);
 ALTER TABLE social_resource_requests DROP CONSTRAINT IF EXISTS social_resource_requests_status_check;
-ALTER TABLE social_resource_requests ADD CONSTRAINT social_resource_requests_status_check CHECK (status IN ('pending', 'approved', 'declined', 'returned'));
+ALTER TABLE social_resource_requests ADD CONSTRAINT social_resource_requests_status_check CHECK (status IN ('pending', 'approved', 'delivered', 'checked_in', 'declined', 'returned'));
+
+CREATE TABLE IF NOT EXISTS social_resource_adjustments (
+  id BIGSERIAL PRIMARY KEY,
+  resource_id BIGINT NOT NULL REFERENCES social_resources(id) ON DELETE CASCADE,
+  adjustment_type TEXT NOT NULL CHECK (adjustment_type IN ('purchase', 'destroyed')),
+  quantity INTEGER NOT NULL CHECK (quantity > 0),
+  note TEXT DEFAULT '',
+  adjusted_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE social_resource_adjustments ADD COLUMN IF NOT EXISTS note TEXT DEFAULT '';
+ALTER TABLE social_resource_adjustments ADD COLUMN IF NOT EXISTS adjusted_by BIGINT REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE social_resource_adjustments DROP CONSTRAINT IF EXISTS social_resource_adjustments_quantity_check;
+ALTER TABLE social_resource_adjustments ADD CONSTRAINT social_resource_adjustments_quantity_check CHECK (quantity > 0);
+ALTER TABLE social_resource_adjustments DROP CONSTRAINT IF EXISTS social_resource_adjustments_type_check;
+ALTER TABLE social_resource_adjustments ADD CONSTRAINT social_resource_adjustments_type_check CHECK (adjustment_type IN ('purchase', 'destroyed'));
 
 CREATE TABLE IF NOT EXISTS social_fund_requests (
   id BIGSERIAL PRIMARY KEY,
@@ -507,6 +528,7 @@ CREATE INDEX IF NOT EXISTS idx_social_assignments_user ON social_assignments(use
 CREATE INDEX IF NOT EXISTS idx_social_resources_status ON social_resources(status, name);
 CREATE INDEX IF NOT EXISTS idx_social_resource_requests_user ON social_resource_requests(requested_by, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_social_resource_requests_status ON social_resource_requests(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_social_resource_adjustments_resource ON social_resource_adjustments(resource_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_social_fund_requests_user ON social_fund_requests(requested_by, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_social_fund_requests_status ON social_fund_requests(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_social_fund_requests_assignment ON social_fund_requests(assignment_id, status);
