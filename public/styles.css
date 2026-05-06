@@ -735,6 +735,21 @@ a {
   border-top: 1px solid var(--line);
 }
 
+.social-admin-tabs {
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.resource-stock-form {
+  align-items: end;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+}
+
 .compact-card {
   padding: 12px;
   background: #fbfcfd;
@@ -866,6 +881,10 @@ a {
   margin-top: 8px;
   color: var(--muted);
   font-size: 0.92rem;
+}
+
+.assignment-response span {
+  white-space: pre-wrap;
 }
 
 .assignment-response-form {

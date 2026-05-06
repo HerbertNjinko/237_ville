@@ -24,6 +24,7 @@ const state = {
     query: ""
   },
   editingLeadershipPositionId: null,
+  adminSocialSection: "meetings",
   voteArchiveQuery: "",
   notificationFilters: {
     userId: "",
@@ -2262,64 +2263,197 @@ function activeMemberOptions(selectedId = "") {
   `;
 }
 
+function socialMeetingOptions(meetings = [], selectedId = "") {
+  const openMeetings = meetings.filter((meeting) => !["completed", "cancelled"].includes(meeting.status));
+  return `
+    <option value="">Choose monthly meeting</option>
+    ${openMeetings
+      .map(
+        (meeting) => `
+          <option value="${meeting.id}" ${Number(selectedId) === Number(meeting.id) ? "selected" : ""}>
+            ${escapeHtml(meeting.title)} - ${formatDate(meeting.meetingDate, { dateOnly: true })}
+          </option>
+        `
+      )
+      .join("")}
+  `;
+}
+
+function flattenSocialAssignments(meetings = []) {
+  return meetings.flatMap((meeting) =>
+    (meeting.assignments || []).map((assignment) => ({
+      ...assignment,
+      meetingTitle: meeting.title,
+      meetingDate: meeting.meetingDate,
+      meetingStatus: meeting.status
+    }))
+  );
+}
+
 function renderAdminSocialCoordinator() {
   const loading = requireAdminData("Loading social coordinator...");
   if (loading) return loading;
 
   const social = state.admin.social || { meetings: [], resources: [], resourceRequests: [] };
-  const pendingRequests = social.resourceRequests.filter((request) => request.status === "pending");
-  const currentMeetings = social.meetings.filter((meeting) => meeting.status !== "completed" && meeting.status !== "cancelled");
+  const assignments = flattenSocialAssignments(social.meetings || []);
+  const pendingRequests = (social.resourceRequests || []).filter((request) => request.status === "pending");
+  const currentMeetings = (social.meetings || []).filter((meeting) => meeting.status !== "completed" && meeting.status !== "cancelled");
+  const checkedOutResources = (social.resources || []).reduce(
+    (total, resource) => total + Math.max(0, Number(resource.totalQuantity || 0) - Number(resource.availableQuantity || 0)),
+    0
+  );
 
   return `
     <section class="content-grid">
       <div class="metric-grid">
-        <div class="metric"><span>Meetings tracked</span><strong>${social.meetings.length}</strong></div>
+        <div class="metric"><span>Meetings tracked</span><strong>${(social.meetings || []).length}</strong></div>
         <div class="metric"><span>Open meetings</span><strong>${currentMeetings.length}</strong></div>
-        <div class="metric"><span>Resources</span><strong>${social.resources.length}</strong></div>
+        <div class="metric"><span>Assignments</span><strong>${assignments.length}</strong></div>
         <div class="metric"><span>Pending requests</span><strong>${pendingRequests.length}</strong></div>
+        <div class="metric"><span>Resources</span><strong>${(social.resources || []).length}</strong></div>
+        <div class="metric"><span>Checked out</span><strong>${checkedOutResources}</strong></div>
       </div>
-      <section class="two-column">
-        <div class="content-grid">
-          <div class="panel">
-            <div class="panel-header">
-              <div>
-                <h3>Monthly meetings</h3>
-                <p>Meetings are planned for the first Saturday of each month.</p>
-              </div>
-            </div>
-            ${renderAdminSocialMeetingList(social.meetings)}
-          </div>
-          <div class="panel">
-            <div class="panel-header">
-              <div>
-                <h3>Resource requests</h3>
-                <p>Review member requests for chairs and other organization resources.</p>
-              </div>
-            </div>
-            ${renderAdminSocialResourceRequests(social.resourceRequests)}
+      ${renderAdminSocialTabs()}
+      ${renderAdminSocialSection(social, assignments)}
+    </section>
+  `;
+}
+
+function renderAdminSocialTabs() {
+  const tabs = [
+    ["meetings", "Monthly meetings"],
+    ["assignments", "Assignments"],
+    ["resources", "Resources"],
+    ["requests", "Resource requests"]
+  ];
+
+  return `
+    <div class="view-tabs social-admin-tabs" aria-label="Social coordinator sections">
+      ${tabs
+        .map(
+          ([key, label]) => `
+            <button class="tab-button ${state.adminSocialSection === key ? "active" : ""}" data-click="admin-social-section" data-section="${key}" type="button">
+              ${escapeHtml(label)}
+            </button>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderAdminSocialSection(social, assignments) {
+  switch (state.adminSocialSection) {
+    case "assignments":
+      return renderAdminSocialAssignmentsSection(social, assignments);
+    case "resources":
+      return renderAdminSocialResourcesSection(social.resources || []);
+    case "requests":
+      return renderAdminSocialRequestsSection(social.resourceRequests || []);
+    default:
+      return renderAdminSocialMeetingsSection(social.meetings || []);
+  }
+}
+
+function renderAdminSocialMeetingsSection(meetings) {
+  return `
+    <section class="two-column">
+      <div class="panel">
+        <div class="panel-header">
+          <div>
+            <h3>Monthly meetings</h3>
+            <p>Meetings are planned for the first Saturday of each month.</p>
           </div>
         </div>
-        <aside class="content-grid">
-          <div class="panel">
-            <div class="panel-header">
-              <div>
-                <h3>Create monthly meeting</h3>
-                <p>Choose a month and the system uses that month&apos;s first Saturday.</p>
-              </div>
-            </div>
-            ${renderSocialMeetingForm()}
+        ${renderAdminSocialMeetingList(meetings)}
+      </div>
+      <aside class="panel">
+        <div class="panel-header">
+          <div>
+            <h3>Create monthly meeting</h3>
+            <p>Choose a month and the system uses that month&apos;s first Saturday.</p>
           </div>
-          <div class="panel">
-            <div class="panel-header">
-              <div>
-                <h3>Resources</h3>
-                <p>Track chairs and other shared organization resources.</p>
-              </div>
-            </div>
-            ${renderSocialResourceManager(social.resources)}
+        </div>
+        ${renderSocialMeetingForm()}
+      </aside>
+    </section>
+  `;
+}
+
+function renderAdminSocialAssignmentsSection(social, assignments) {
+  return `
+    <section class="two-column">
+      <div class="panel">
+        <div class="panel-header">
+          <div>
+            <h3>Assignments</h3>
+            <p>Manage food, drinks, hosting, setup, and cleanup tasks across monthly meetings.</p>
           </div>
-        </aside>
-      </section>
+        </div>
+        ${renderSocialAssignmentList(assignments)}
+      </div>
+      <aside class="panel">
+        <div class="panel-header">
+          <div>
+            <h3>Assign task</h3>
+            <p>Choose a meeting and assign responsibility to an active member.</p>
+          </div>
+        </div>
+        ${renderSocialAssignmentForm("", social.meetings || [])}
+      </aside>
+    </section>
+  `;
+}
+
+function renderAdminSocialResourcesSection(resources) {
+  return `
+    <section class="two-column">
+      <div class="panel">
+        <div class="panel-header">
+          <div>
+            <h3>Resource inventory</h3>
+            <p>Update existing resources when the organization buys more instead of creating duplicates.</p>
+          </div>
+        </div>
+        ${renderSocialResourceList(resources)}
+      </div>
+      <aside class="panel">
+        <div class="panel-header">
+          <div>
+            <h3>Add new resource</h3>
+            <p>Create a resource once, then use add quantity for future purchases.</p>
+          </div>
+        </div>
+        ${renderSocialResourceCreateForm()}
+      </aside>
+    </section>
+  `;
+}
+
+function renderAdminSocialRequestsSection(requests) {
+  const pending = requests.filter((request) => request.status === "pending");
+  const reviewed = requests.filter((request) => request.status !== "pending");
+
+  return `
+    <section class="two-column">
+      <div class="panel">
+        <div class="panel-header">
+          <div>
+            <h3>Pending resource requests</h3>
+            <p>Approve, decline, or mark requested resources returned.</p>
+          </div>
+        </div>
+        ${renderAdminSocialResourceRequests(pending)}
+      </div>
+      <aside class="panel">
+        <div class="panel-header">
+          <div>
+            <h3>Request history</h3>
+            <p>Reviewed resource requests remain available for follow-up.</p>
+          </div>
+        </div>
+        ${renderAdminSocialResourceRequests(reviewed)}
+      </aside>
     </section>
   `;
 }
@@ -2359,6 +2493,8 @@ function renderAdminSocialMeetingList(meetings) {
 }
 
 function renderAdminSocialMeetingCard(meeting) {
+  const assignments = meeting.assignments || [];
+
   return `
     <article class="item-card social-meeting-card">
       <div class="panel-header">
@@ -2397,9 +2533,13 @@ function renderAdminSocialMeetingCard(meeting) {
         </div>
       </form>
       <div class="social-subsection">
-        <h4>Assignments</h4>
-        ${renderSocialAssignmentList(meeting.assignments || [])}
-        ${renderSocialAssignmentForm(meeting.id)}
+        <div class="panel-header">
+          <div>
+            <h4>Assignment summary</h4>
+            <p>${assignments.length} task${assignments.length === 1 ? "" : "s"} assigned for this meeting.</p>
+          </div>
+        </div>
+        ${renderSocialAssignmentSummary(assignments)}
       </div>
     </article>
   `;
@@ -2414,6 +2554,17 @@ function renderSocialAssignmentList(assignments) {
         .map(
           (assignment) => `
             <form class="item-card compact-card" data-action="update-social-assignment" data-assignment-id="${assignment.id}">
+              ${
+                assignment.meetingTitle
+                  ? `<div class="panel-header">
+                      <div>
+                        <h4>${escapeHtml(assignment.meetingTitle)}</h4>
+                        <p>${formatDate(assignment.meetingDate, { dateOnly: true })}</p>
+                      </div>
+                      ${assignment.meetingStatus ? statusPill(assignment.meetingStatus) : ""}
+                    </div>`
+                  : ""
+              }
               <div class="form-grid">
                 <label class="field">
                   <span>Member</span>
@@ -2450,9 +2601,21 @@ function renderSocialAssignmentList(assignments) {
   `;
 }
 
-function renderSocialAssignmentForm(meetingId) {
+function renderSocialAssignmentForm(meetingId = "", meetings = []) {
+  const meetingField = meetingId
+    ? ""
+    : `<label class="field">
+        <span>Monthly meeting</span>
+        <select name="meetingId" required>${socialMeetingOptions(meetings)}</select>
+      </label>`;
+
+  if (!meetingId && !meetings.filter((meeting) => !["completed", "cancelled"].includes(meeting.status)).length) {
+    return emptyState("Create an open monthly meeting before assigning tasks.");
+  }
+
   return `
-    <form class="form-stack social-assignment-form" data-action="create-social-assignment" data-meeting-id="${meetingId}">
+    <form class="form-stack social-assignment-form" data-action="create-social-assignment" ${meetingId ? `data-meeting-id="${meetingId}"` : ""}>
+      ${meetingField}
       <div class="form-grid">
         <label class="field">
           <span>Member</span>
@@ -2484,35 +2647,36 @@ function renderSocialAssignmentForm(meetingId) {
 }
 
 function renderSocialResourceManager(resources) {
+  return renderAdminSocialResourcesSection(resources);
+}
+
+function renderSocialResourceCreateForm() {
   return `
-    <div class="content-grid">
-      <form class="form-stack" data-action="create-social-resource">
+    <form class="form-stack" data-action="create-social-resource">
+      <label class="field">
+        <span>Resource name</span>
+        <input name="name" placeholder="Chairs, tables, coolers..." required>
+      </label>
+      <div class="form-grid">
         <label class="field">
-          <span>Resource name</span>
-          <input name="name" placeholder="Chairs, tables, coolers..." required>
-        </label>
-        <div class="form-grid">
-          <label class="field">
-            <span>Total quantity</span>
-            <input name="totalQuantity" type="number" min="0" step="1" value="0">
-          </label>
-          <label class="field">
-            <span>Available quantity</span>
-            <input name="availableQuantity" type="number" min="0" step="1" value="0">
-          </label>
-        </div>
-        <label class="field">
-          <span>Storage location</span>
-          <input name="storageLocation">
+          <span>Total quantity</span>
+          <input name="totalQuantity" type="number" min="0" step="1" value="0">
         </label>
         <label class="field">
-          <span>Description</span>
-          <textarea name="description"></textarea>
+          <span>Available quantity</span>
+          <input name="availableQuantity" type="number" min="0" step="1" value="0">
         </label>
-        <button class="primary-button" type="submit">Add resource</button>
-      </form>
-      ${renderSocialResourceList(resources)}
-    </div>
+      </div>
+      <label class="field">
+        <span>Storage location</span>
+        <input name="storageLocation">
+      </label>
+      <label class="field">
+        <span>Description</span>
+        <textarea name="description"></textarea>
+      </label>
+      <button class="primary-button" type="submit">Add resource</button>
+    </form>
   `;
 }
 
@@ -2523,8 +2687,10 @@ function renderSocialResourceList(resources) {
     <div class="item-list">
       ${resources
         .map(
-          (resource) => `
-            <form class="item-card compact-card" data-action="update-social-resource" data-resource-id="${resource.id}">
+          (resource) => {
+            const checkedOut = Math.max(0, Number(resource.totalQuantity || 0) - Number(resource.availableQuantity || 0));
+            return `
+            <article class="item-card compact-card">
               <div class="panel-header">
                 <div>
                   <h4>${escapeHtml(resource.name)}</h4>
@@ -2532,6 +2698,22 @@ function renderSocialResourceList(resources) {
                 </div>
                 ${statusPill(resource.status)}
               </div>
+              <div class="item-meta">
+                <span>Total ${resource.totalQuantity}</span>
+                <span>Available ${resource.availableQuantity}</span>
+                <span>Checked out ${checkedOut}</span>
+                ${resource.storageLocation ? `<span>${escapeHtml(resource.storageLocation)}</span>` : ""}
+              </div>
+              <form class="form-grid resource-stock-form" data-action="add-social-resource-stock" data-resource-id="${resource.id}">
+                <label class="field">
+                  <span>Add purchased quantity</span>
+                  <input name="quantity" type="number" min="1" step="1" value="1" required>
+                </label>
+                <div class="filter-actions">
+                  <button class="primary-button" type="submit">Add quantity</button>
+                </div>
+              </form>
+              <form class="form-stack" data-action="update-social-resource" data-resource-id="${resource.id}">
               <div class="form-grid">
                 <label class="field">
                   <span>Name</span>
@@ -2560,7 +2742,9 @@ function renderSocialResourceList(resources) {
               </label>
               <button class="secondary-button" type="submit">Save resource</button>
             </form>
-          `
+            </article>
+          `;
+          }
         )
         .join("")}
     </div>
@@ -2627,25 +2811,14 @@ function renderSocialCoordinator() {
   return `
     <section class="content-grid">
       <section class="two-column">
-        <div class="content-grid">
-          <div class="panel">
-            <div class="panel-header">
-              <div>
-                <h3>Monthly social meetings</h3>
-                <p>Food, drinks, hosting, and setup assignments for first-Saturday meetings.</p>
-              </div>
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <h3>My assignments</h3>
+              <p>Tasks assigned to you by the social coordinator.</p>
             </div>
-            ${renderMemberSocialMeetings(meetings)}
           </div>
-          <div class="panel">
-            <div class="panel-header">
-              <div>
-                <h3>My assignments</h3>
-                <p>Tasks assigned to you by the social coordinator.</p>
-              </div>
-            </div>
-            ${renderMemberSocialAssignments(myAssignments)}
-          </div>
+          ${renderMemberSocialAssignments(myAssignments)}
         </div>
         <aside class="content-grid">
           <div class="panel">
@@ -2726,7 +2899,7 @@ function renderSocialAssignmentResponseDetails(assignment) {
   const details = [];
 
   if (foodContribution) {
-    details.push(`<span><strong>Food:</strong> ${escapeHtml(foodContribution)}</span>`);
+    details.push(`<span><strong>Dishes:</strong> ${escapeHtml(foodContribution)}</span>`);
   }
 
   if (drinkBottleCount > 0 || drinkBrand) {
@@ -2736,7 +2909,7 @@ function renderSocialAssignmentResponseDetails(assignment) {
     }
     drinkParts.push(assignment.drinkIsAlcoholic ? "alcoholic" : "non-alcoholic");
     if (drinkBrand) {
-      drinkParts.push(escapeHtml(drinkBrand));
+      drinkParts.push(`Brands: ${escapeHtml(drinkBrand)}`);
     }
     details.push(`<span><strong>Drinks:</strong> ${drinkParts.join(", ")}</span>`);
   }
@@ -2788,8 +2961,8 @@ function renderSocialAssignmentResponseForm(assignment) {
       ${
         isFoodAssignment
           ? `<label class="field">
-              <span>Food you will bring</span>
-              <textarea name="foodContribution" required>${escapeHtml(assignment.foodContribution || "")}</textarea>
+              <span>Dishes you will bring</span>
+              <textarea name="foodContribution" placeholder="List each dish on a new line or separate dishes with commas." required>${escapeHtml(assignment.foodContribution || "")}</textarea>
             </label>`
           : ""
       }
@@ -2797,17 +2970,17 @@ function renderSocialAssignmentResponseForm(assignment) {
         isDrinkAssignment
           ? `<div class="form-grid">
               <label class="field">
-                <span>Number of bottles</span>
+                <span>Total number of bottles</span>
                 <input name="drinkBottleCount" type="number" min="1" step="1" value="${Number(assignment.drinkBottleCount || 0) || ""}" required>
               </label>
               <label class="field">
-                <span>Drink brand</span>
-                <input name="drinkBrand" value="${escapeHtml(assignment.drinkBrand || "")}" required>
+                <span>Drink brands you will bring</span>
+                <textarea name="drinkBrand" placeholder="List each brand on a new line or separate brands with commas." required>${escapeHtml(assignment.drinkBrand || "")}</textarea>
               </label>
             </div>
             <label class="checkbox-row">
               <input name="drinkIsAlcoholic" type="checkbox" ${assignment.drinkIsAlcoholic ? "checked" : ""}>
-              <span>Drink includes alcohol</span>
+              <span>Includes alcoholic drink(s)</span>
             </label>`
           : ""
       }
@@ -3974,7 +4147,15 @@ async function handleSubmit(event) {
     }
 
     if (action === "create-social-assignment") {
-      await api(`/api/admin/social/meetings/${form.dataset.meetingId}/assignments`, {
+      const meetingId = form.dataset.meetingId || payload.meetingId;
+      if (!meetingId) {
+        state.message = "Choose a monthly meeting before assigning the task.";
+        state.messageType = "error";
+        render();
+        return;
+      }
+      delete payload.meetingId;
+      await api(`/api/admin/social/meetings/${meetingId}/assignments`, {
         method: "POST",
         body: JSON.stringify(payload)
       });
@@ -4016,6 +4197,19 @@ async function handleSubmit(event) {
       });
       form.reset();
       state.message = "Resource added.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
+    if (action === "add-social-resource-stock") {
+      payload.quantity = Number(payload.quantity || 0);
+      await api(`/api/admin/social/resources/${form.dataset.resourceId}/stock`, {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      form.reset();
+      state.message = "Resource quantity updated.";
       state.messageType = "ok";
       await refreshAll({ includeAdmin: true });
       return;
@@ -4242,6 +4436,12 @@ async function handleClick(event) {
 
     if (action === "payment-filter") {
       state.adminPaymentFilter = button.dataset.filter || "all";
+      render();
+      return;
+    }
+
+    if (action === "admin-social-section") {
+      state.adminSocialSection = button.dataset.section || "meetings";
       render();
       return;
     }

@@ -1307,7 +1307,7 @@ function socialAssignmentResponseDetails(assignment) {
   const details = [];
 
   if ((taskType === "food" || foodContribution) && foodContribution) {
-    details.push(`Food: ${foodContribution}`);
+    details.push(`Dishes: ${foodContribution}`);
   }
 
   if ((taskType === "drinks" || drinkBottleCount > 0 || drinkBrand) && (drinkBottleCount > 0 || drinkBrand)) {
@@ -1317,7 +1317,7 @@ function socialAssignmentResponseDetails(assignment) {
     }
     drinkDetails.push(drinkIsAlcoholic ? "alcoholic" : "non-alcoholic");
     if (drinkBrand) {
-      drinkDetails.push(drinkBrand);
+      drinkDetails.push(`Brands: ${drinkBrand}`);
     }
     details.push(`Drinks: ${drinkDetails.join(", ")}`);
   }
@@ -2145,10 +2145,10 @@ async function handleApi(req, res, url) {
     const responseNote = String(payload.responseNote || "").trim();
 
     if (assignment.task_type === "food" && !foodContribution) {
-      return sendError(res, 400, "Enter the food you will bring.");
+      return sendError(res, 400, "Enter the dishes you will bring.");
     }
     if (assignment.task_type === "drinks" && (!drinkBottleCount || !drinkBrand)) {
-      return sendError(res, 400, "Enter the drink bottle count and brand.");
+      return sendError(res, 400, "Enter the drink bottle count and at least one drink brand.");
     }
 
     const { rows } = await query(
@@ -2310,6 +2310,37 @@ async function handleApi(req, res, url) {
         String(payload.storageLocation || "").trim(),
         normalizeResourceStatus(payload.status)
       ]
+    );
+
+    if (rows.length === 0) {
+      return sendError(res, 404, "Resource not found.");
+    }
+
+    return sendJson(res, 200, { resource: toSocialResource(rows[0]) });
+  }
+
+  const socialResourceStockMatch = pathname.match(/^\/api\/admin\/social\/resources\/(\d+)\/stock$/);
+  if (method === "POST" && socialResourceStockMatch) {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    const resourceId = parseId(socialResourceStockMatch[1]);
+    const payload = await readJson(req);
+    const quantity = Math.trunc(Number(payload.quantity || 0));
+
+    if (quantity < 1) {
+      return sendError(res, 400, "Enter a quantity of at least 1.");
+    }
+
+    const { rows } = await query(
+      `
+        UPDATE social_resources
+        SET total_quantity = total_quantity + $2,
+            available_quantity = available_quantity + $2,
+            updated_at = now()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [resourceId, quantity]
     );
 
     if (rows.length === 0) {
