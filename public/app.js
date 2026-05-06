@@ -1,4 +1,5 @@
 const app = document.querySelector("#app");
+const companyLogoSrc = "/assets/237ville%20logo.png";
 
 const state = {
   user: null,
@@ -256,7 +257,7 @@ function render() {
   if (!state.data) {
     app.innerHTML = `
       <main class="loading-view">
-        <img src="/assets/237-mark.svg" alt="237 Ville" class="loading-mark">
+        <img src="${companyLogoSrc}" alt="237 Ville" class="loading-mark">
         <p>Loading member dashboard...</p>
       </main>
     `;
@@ -375,7 +376,7 @@ function renderPublicMenu() {
   return `
     <header class="public-topbar">
       <button class="public-brand-link" data-auth-mode="home" type="button" aria-label="237 Ville home">
-        <img src="/assets/237-mark.svg" alt="">
+        <img src="${companyLogoSrc}" alt="">
         <span>237 Ville</span>
       </button>
       <nav class="public-menu" aria-label="Public navigation">
@@ -408,7 +409,7 @@ function renderPublicHome(about) {
   return `
     <section class="public-hero">
       <div>
-        <img src="/assets/237-mark.svg" alt="237 Ville">
+        <img src="${companyLogoSrc}" alt="237 Ville">
         <h1>237 Ville</h1>
         <p>${escapeHtml(about.summary || "Member hub for community updates, public articles, elections, events, dues, donations, and questions for the board.")}</p>
       </div>
@@ -443,8 +444,11 @@ function renderPublicFormPage(about) {
   return `
     <section class="public-action-layout">
       <aside class="public-intro">
-        <h1>237 Ville</h1>
-        <p>${escapeHtml(about.summary || "Stay connected to the organization, participate in votes, follow events, and support the community.")}</p>
+        <div>
+          <h1>237 Ville</h1>
+          <p>${escapeHtml(about.summary || "Stay connected to the organization, participate in votes, follow events, and support the community.")}</p>
+        </div>
+        <img class="public-intro-logo" src="${companyLogoSrc}" alt="237 Ville logo">
       </aside>
       <div class="public-form-card">
         <h2>${heading}</h2>
@@ -616,7 +620,7 @@ function renderOnboarding() {
       <section class="auth-panel onboarding-panel">
         <div class="auth-brand">
           <div>
-            <img src="/assets/237-mark.svg" alt="237 Ville">
+            <img src="${companyLogoSrc}" alt="237 Ville">
             <h1>237 Ville</h1>
             <p>${escapeHtml(user.fullName)} needs to complete account setup before the member portal opens.</p>
           </div>
@@ -740,7 +744,7 @@ function renderShell() {
     <div class="dashboard-layout">
       <aside class="sidebar">
         <div class="brand-row">
-          <img src="/assets/237-mark.svg" alt="237 Ville">
+          <img src="${companyLogoSrc}" alt="237 Ville">
           <div>
             <strong>237 Ville</strong>
             <span>${escapeHtml(state.user.role)} portal</span>

@@ -69,6 +69,7 @@ a {
 .loading-mark {
   width: 72px;
   height: 72px;
+  object-fit: contain;
   margin-bottom: 14px;
 }
 
@@ -98,7 +99,7 @@ a {
 }
 
 .public-brand-link {
-  min-height: 44px;
+  min-height: 64px;
   display: inline-flex;
   align-items: center;
   gap: 10px;
@@ -110,8 +111,9 @@ a {
 }
 
 .public-brand-link img {
-  width: 40px;
-  height: 40px;
+  width: 62px;
+  height: 62px;
+  object-fit: contain;
 }
 
 .public-menu {
@@ -123,7 +125,7 @@ a {
 }
 
 .public-hero {
-  min-height: 300px;
+  min-height: 360px;
   display: grid;
   align-items: end;
   padding: 44px;
@@ -134,8 +136,9 @@ a {
 }
 
 .public-hero img {
-  width: 92px;
-  height: 92px;
+  width: clamp(150px, 18vw, 220px);
+  height: clamp(150px, 18vw, 220px);
+  object-fit: contain;
 }
 
 .public-hero h1 {
@@ -176,13 +179,28 @@ a {
   display: grid;
   grid-template-columns: minmax(240px, 0.85fr) minmax(340px, 1.15fr);
   gap: 18px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .public-intro {
   padding: 28px;
   background: #111827;
   color: white;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 24px;
+  min-height: 100%;
+  overflow: hidden;
+}
+
+.public-intro-logo {
+  width: min(280px, 82%);
+  aspect-ratio: 1 / 1;
+  object-fit: contain;
+  align-self: center;
+  margin-top: auto;
+  border-radius: 8px;
 }
 
 .public-intro h1,
@@ -216,6 +234,7 @@ a {
 .auth-brand img {
   width: 88px;
   height: 88px;
+  object-fit: contain;
 }
 
 .auth-brand h1 {
@@ -405,6 +424,7 @@ a {
 .brand-row img {
   width: 44px;
   height: 44px;
+  object-fit: contain;
 }
 
 .brand-row strong {
