@@ -4,6 +4,18 @@ const state = {
   user: null,
   data: null,
   admin: null,
+  adminNotifications: null,
+  adminPaymentFilter: "all",
+  memberFilter: {
+    scope: "all",
+    query: ""
+  },
+  voteArchiveQuery: "",
+  notificationFilters: {
+    userId: "",
+    dateFrom: "",
+    dateTo: ""
+  },
   view: "overview",
   authMode: "login",
   message: "",
@@ -20,7 +32,16 @@ const memberViews = [
   ["profile", "Profile"]
 ];
 
-const adminViews = [["admin", "Admin"]];
+const adminViews = [
+  ["overview", "Overview"],
+  ["announcements", "Announcements"],
+  ["questions", "Questions"],
+  ["events", "Events"],
+  ["votes", "Votes"],
+  ["payments", "Dues and donations"],
+  ["profile", "Members / Profile"],
+  ["notifications", "Notifications"]
+];
 
 function escapeHtml(value = "") {
   return String(value)
@@ -75,6 +96,24 @@ function generateTemporaryPassword() {
   return Array.from(bytes, (value) => alphabet[value % alphabet.length]).join("");
 }
 
+function csvCell(value) {
+  return `"${String(value ?? "").replaceAll('"', '""')}"`;
+}
+
+function downloadCsv(filename, rows) {
+  const blob = new Blob([rows.map((row) => row.map(csvCell).join(",")).join("\n")], {
+    type: "text/csv;charset=utf-8"
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 function statusPill(status) {
   return `<span class="status-pill ${escapeHtml(status)}">${escapeHtml(status)}</span>`;
 }
@@ -120,6 +159,9 @@ async function loadDashboard() {
   const data = await api("/api/dashboard");
   state.user = data.user;
   state.data = data;
+  if (state.user.role === "admin" && !state.admin) {
+    await loadAdminSummary();
+  }
 }
 
 async function loadAdminSummary() {
@@ -127,11 +169,25 @@ async function loadAdminSummary() {
   state.admin = await api("/api/admin/summary");
 }
 
+async function loadAdminNotifications() {
+  if (!state.user || state.user.role !== "admin") return;
+  const params = new URLSearchParams();
+  if (state.notificationFilters.userId) params.set("userId", state.notificationFilters.userId);
+  if (state.notificationFilters.dateFrom) params.set("dateFrom", state.notificationFilters.dateFrom);
+  if (state.notificationFilters.dateTo) params.set("dateTo", state.notificationFilters.dateTo);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const payload = await api(`/api/admin/notifications${suffix}`);
+  state.adminNotifications = payload.notifications;
+}
+
 async function refreshAll({ includeAdmin = false } = {}) {
   await loadDashboard();
   if (includeAdmin || state.view === "admin") {
     state.admin = null;
     await loadAdminSummary();
+  }
+  if (state.view === "notifications") {
+    await loadAdminNotifications();
   }
   render();
 }
@@ -369,7 +425,7 @@ function renderOnboardingStep(user, policy, feePayment, feeCents) {
 }
 
 function renderShell() {
-  const views = state.user.role === "admin" ? [...memberViews, ...adminViews] : memberViews;
+  const views = state.user.role === "admin" ? adminViews : memberViews;
   const currentTitle = views.find(([key]) => key === state.view)?.[1] || "Overview";
   const unread = (state.data.notifications || []).filter((notification) => !notification.readAt).length;
 
@@ -416,6 +472,20 @@ function renderShell() {
 }
 
 function topbarSubtitle() {
+  if (state.user?.role === "admin") {
+    const adminMap = {
+      overview: "Backend statistics across members, money, content, events, votes, and notifications.",
+      announcements: "Publish and review organization announcements and member-sourced articles.",
+      questions: "Review member questions, publish discussions, or turn submissions into articles.",
+      events: "Create and manage organization events.",
+      votes: "Create ballots, open voting, close voting, and review aggregate results.",
+      payments: "Track dues, donations, pending payments, and members who have not paid dues.",
+      profile: "Update member and admin account details.",
+      notifications: "Filter and export notification records for audit."
+    };
+    return adminMap[state.view] || "";
+  }
+
   const map = {
     overview: "Current organization activity at a glance.",
     announcements: "Published updates and articles from 237 Ville.",
@@ -424,12 +494,34 @@ function topbarSubtitle() {
     questions: "Member questions approved for community discussion.",
     payments: "Record dues and donations for admin review.",
     profile: "Update your member account details.",
-    admin: "Publish content, plan events, manage ballots, and review member activity."
+    admin: "Publish content, plan events, manage ballots, and review member activity.",
+    notifications: "Filter and export organization notification records."
   };
   return map[state.view] || "";
 }
 
 function renderView() {
+  if (state.user.role === "admin") {
+    switch (state.view) {
+      case "announcements":
+        return renderAdminAnnouncements();
+      case "questions":
+        return renderAdminQuestionsPage();
+      case "events":
+        return renderAdminEvents();
+      case "votes":
+        return renderAdminVotes();
+      case "payments":
+        return renderAdminPayments();
+      case "profile":
+        return renderAdminProfiles();
+      case "notifications":
+        return renderAdminNotifications();
+      default:
+        return renderAdminOverview();
+    }
+  }
+
   switch (state.view) {
     case "announcements":
       return renderAnnouncements();
@@ -443,8 +535,6 @@ function renderView() {
       return renderPayments();
     case "profile":
       return renderProfile();
-    case "admin":
-      return renderAdmin();
     default:
       return renderOverview();
   }
@@ -503,6 +593,7 @@ function renderOverview() {
                 <p>Published updates for your account.</p>
               </div>
             </div>
+            ${state.user.role === "admin" ? renderNotificationCleanupForm("overview") : ""}
             ${renderNotificationList(state.data.notifications || [])}
           </div>
         </div>
@@ -551,14 +642,29 @@ function renderAnnouncementList(announcements) {
 
 function renderVotes() {
   const ballots = state.data.ballots || [];
+  const activeBallots = ballots.filter((ballot) => ballot.status === "open");
+  const pastBallots = ballots.filter((ballot) => ballot.status !== "open");
 
   return `
     <section class="content-grid">
-      ${
-        ballots.length
-          ? ballots.map(renderBallotCard).join("")
-          : emptyState("No ballots have been created.")
-      }
+      <div class="panel">
+        <div class="panel-header">
+          <div>
+            <h3>Open votes</h3>
+            <p>Current issues and elections available for voting.</p>
+          </div>
+        </div>
+        ${activeBallots.length ? activeBallots.map(renderBallotCard).join("") : emptyState("No open votes right now.")}
+      </div>
+      <div class="panel">
+        <div class="panel-header">
+          <div>
+            <h3>Past vote results</h3>
+            <p>Closed votes show aggregate results only.</p>
+          </div>
+        </div>
+        ${pastBallots.length ? pastBallots.map(renderBallotCard).join("") : emptyState("No past vote results yet.")}
+      </div>
     </section>
   `;
 }
@@ -677,43 +783,74 @@ function renderNotificationList(notifications) {
   `;
 }
 
+function renderNotificationCleanupForm(scope = "admin") {
+  return `
+    <form class="notification-cleanup compact-form" data-action="clear-old-notifications" data-scope="${escapeHtml(scope)}">
+      <label class="field">
+        <span>Clear notifications older than days</span>
+        <input name="days" type="number" min="1" max="365" value="30" required>
+      </label>
+      <button class="danger-button" type="submit">Clear old notifications</button>
+    </form>
+  `;
+}
+
 function renderQuestions() {
   const questions = state.data.questions || [];
+  const articles = (state.data.announcements || []).filter((announcement) => announcement.category === "article");
 
   return `
-    <section class="two-column">
+    <section class="content-grid">
+      <div class="two-column">
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <h3>Published questions</h3>
+              <p>Community discussion starts after admin approval.</p>
+            </div>
+          </div>
+          ${
+            questions.length
+              ? `<div class="item-list">${questions.map(renderQuestionCard).join("")}</div>`
+              : emptyState("No member questions have been published.")
+          }
+        </div>
+        <aside class="panel">
+          <div class="panel-header">
+            <div>
+              <h3>Submit to admin</h3>
+              <p>Questions and articles are reviewed before publication.</p>
+            </div>
+          </div>
+          <form class="form-stack" data-action="create-question">
+            <label class="field">
+              <span>Submission type</span>
+              <select name="contentType">
+                <option value="question">Question</option>
+                <option value="article">Article</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Title</span>
+              <input name="title" required>
+            </label>
+            <label class="field">
+              <span>Details</span>
+              <textarea name="body" required></textarea>
+            </label>
+            <button class="primary-button" type="submit">Submit for review</button>
+          </form>
+        </aside>
+      </div>
       <div class="panel">
         <div class="panel-header">
           <div>
-            <h3>Published questions</h3>
-            <p>Community discussion starts after admin approval.</p>
+            <h3>Published articles</h3>
+            <p>Member and organization articles approved by admins.</p>
           </div>
         </div>
-        ${
-          questions.length
-            ? `<div class="item-list">${questions.map(renderQuestionCard).join("")}</div>`
-            : emptyState("No member questions have been published.")
-        }
+        ${renderAnnouncementList(articles)}
       </div>
-      <aside class="panel">
-        <div class="panel-header">
-          <div>
-            <h3>Ask the admin</h3>
-            <p>Submitted questions are reviewed before publication.</p>
-          </div>
-        </div>
-        <form class="form-stack" data-action="create-question">
-          <label class="field">
-            <span>Question title</span>
-            <input name="title" required>
-          </label>
-          <label class="field">
-            <span>Details</span>
-            <textarea name="body" required></textarea>
-          </label>
-          <button class="primary-button" type="submit">Submit question</button>
-        </form>
-      </aside>
     </section>
   `;
 }
@@ -906,7 +1043,7 @@ function renderProfile() {
   `;
 }
 
-function renderAdmin() {
+function requireAdminData(label = "Loading admin tools...") {
   if (state.user.role !== "admin") {
     return emptyState("Admin access is required.");
   }
@@ -916,187 +1053,602 @@ function renderAdmin() {
       await loadAdminSummary();
       render();
     });
-    return emptyState("Loading admin tools...");
+    return emptyState(label);
   }
 
-  const pendingApprovals = (state.admin.members || []).filter((member) => member.membershipStatus === "pending_approval");
+  return "";
+}
+
+function adminStats() {
+  const members = state.admin?.members || [];
+  const payments = state.admin?.payments || [];
+  const activeMembers = members.filter((member) => member.membershipStatus === "active");
+  const pendingApprovals = members.filter((member) => member.membershipStatus === "pending_approval");
+  const duesPaidIds = new Set(
+    payments
+      .filter((payment) => payment.purpose === "dues" && payment.status === "received")
+      .map((payment) => Number(payment.userId))
+  );
+  const donors = new Set(
+    payments
+      .filter((payment) => payment.purpose === "donation" && payment.status === "received")
+      .map((payment) => Number(payment.userId))
+  );
+
+  return {
+    members,
+    payments,
+    activeMembers,
+    pendingApprovals,
+    duesPaidIds,
+    donors,
+    pendingQuestions: (state.admin?.questions || []).filter((question) => question.status === "pending"),
+    openBallots: (state.admin?.ballots || []).filter((ballot) => ballot.status === "open"),
+    upcomingEvents: (state.admin?.events || []).filter((event) => new Date(event.startsAt) >= new Date())
+  };
+}
+
+function renderAdminOverview() {
+  const loading = requireAdminData("Loading admin overview...");
+  if (loading) return loading;
+
+  const stats = adminStats();
+  const unread = (state.data.notifications || []).filter((notification) => !notification.readAt);
 
   return `
     <section class="admin-section">
       <div class="metric-grid">
-        <div class="metric"><span>Members</span><strong>${state.admin.members.length}</strong></div>
-        <div class="metric"><span>Pending approvals</span><strong>${pendingApprovals.length}</strong></div>
-        <div class="metric"><span>Questions</span><strong>${state.admin.questions.length}</strong></div>
-        <div class="metric"><span>Ballots</span><strong>${state.admin.ballots.length}</strong></div>
+        <div class="metric"><span>Total members</span><strong>${stats.members.length}</strong></div>
+        <div class="metric"><span>Pending approvals</span><strong>${stats.pendingApprovals.length}</strong></div>
+        <div class="metric"><span>Dues paid</span><strong>${stats.duesPaidIds.size}</strong></div>
+        <div class="metric"><span>Dues unpaid</span><strong>${Math.max(stats.activeMembers.length - stats.duesPaidIds.size, 0)}</strong></div>
       </div>
+      <div class="metric-grid">
+        <div class="metric"><span>Pending questions</span><strong>${stats.pendingQuestions.length}</strong></div>
+        <div class="metric"><span>Upcoming events</span><strong>${stats.upcomingEvents.length}</strong></div>
+        <div class="metric"><span>Open ballots</span><strong>${stats.openBallots.length}</strong></div>
+        <div class="metric"><span>Unread notices</span><strong>${unread.length}</strong></div>
+      </div>
+      <section class="two-column">
+        <div class="content-grid">
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <h3>Account approvals</h3>
+                <p>Validate member applications and ID cards.</p>
+              </div>
+            </div>
+            ${renderPendingApprovals(stats.pendingApprovals)}
+          </div>
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <h3>Payment review</h3>
+                <p>Pending dues, donations, and registration fees.</p>
+              </div>
+            </div>
+            ${renderPaymentTable(stats.payments.filter((payment) => payment.status === "pending").slice(0, 8), true)}
+          </div>
+        </div>
+        <div class="content-grid">
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <h3>Notifications</h3>
+                <p>Recent admin notices and cleanup.</p>
+              </div>
+            </div>
+            ${renderNotificationCleanupForm("overview")}
+            ${renderNotificationList(state.data.notifications || [])}
+          </div>
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <h3>Upcoming events</h3>
+                <p>Next organization dates.</p>
+              </div>
+            </div>
+            ${renderEventList(stats.upcomingEvents.slice(0, 5))}
+          </div>
+        </div>
+      </section>
+    </section>
+  `;
+}
+
+function renderAdminAnnouncements() {
+  const loading = requireAdminData("Loading announcements...");
+  if (loading) return loading;
+
+  return `
+    <section class="two-column">
       <div class="panel">
         <div class="panel-header">
           <div>
-            <h3>Account approvals</h3>
-            <p>Approve registered members and issue a temporary password.</p>
+            <h3>Published announcements and articles</h3>
+            <p>Review what has been sent to members.</p>
           </div>
         </div>
-        ${renderPendingApprovals(pendingApprovals)}
+        ${renderAnnouncementList(state.admin.announcements || [])}
       </div>
+      <aside class="panel">
+        <div class="panel-header">
+          <div>
+            <h3>Publish announcement</h3>
+            <p>Published items create member notifications.</p>
+          </div>
+        </div>
+        ${renderAnnouncementForm()}
+      </aside>
+    </section>
+  `;
+}
+
+function renderAnnouncementForm() {
+  return `
+    <form class="form-stack" data-action="create-announcement">
+      <label class="field">
+        <span>Title</span>
+        <input name="title" required>
+      </label>
+      <label class="field">
+        <span>Category</span>
+        <select name="category">
+          <option value="announcement">Announcement</option>
+          <option value="article">Article</option>
+          <option value="board_update">Board update</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Body</span>
+        <textarea name="body" required></textarea>
+      </label>
+      <button class="primary-button" type="submit">Publish</button>
+    </form>
+  `;
+}
+
+function renderAdminQuestionsPage() {
+  const loading = requireAdminData("Loading questions...");
+  if (loading) return loading;
+
+  return `
+    <section class="panel">
+      <div class="panel-header">
+        <div>
+          <h3>Member questions and articles</h3>
+          <p>Publish questions for discussion, close resolved submissions, or publish a member article submission.</p>
+        </div>
+      </div>
+      ${renderAdminQuestions()}
+    </section>
+  `;
+}
+
+function renderAdminEvents() {
+  const loading = requireAdminData("Loading events...");
+  if (loading) return loading;
+
+  return `
+    <section class="two-column">
       <div class="panel">
         <div class="panel-header">
           <div>
-            <h3>Notification cleanup</h3>
-            <p>Remove old admin notifications from your account.</p>
+            <h3>Organization events</h3>
+            <p>Upcoming and past scheduled events.</p>
           </div>
         </div>
-        <form class="form-stack compact-form" data-action="clear-old-notifications">
-          <label class="field">
-            <span>Delete notifications older than days</span>
-            <input name="days" type="number" min="1" max="365" value="30" required>
-          </label>
-          <button class="danger-button" type="submit">Clear old notifications</button>
-        </form>
+        ${renderEventList(state.admin.events || [])}
       </div>
+      <aside class="panel">
+        <div class="panel-header">
+          <div>
+            <h3>Create event</h3>
+            <p>Plan meetings, programs, and community gatherings.</p>
+          </div>
+        </div>
+        ${renderEventForm()}
+      </aside>
+    </section>
+  `;
+}
+
+function renderEventForm() {
+  return `
+    <form class="form-stack" data-action="create-event">
+      <label class="field">
+        <span>Title</span>
+        <input name="title" required>
+      </label>
+      <label class="field">
+        <span>Location</span>
+        <input name="location">
+      </label>
+      <div class="form-grid">
+        <label class="field">
+          <span>Starts</span>
+          <input name="startsAt" type="datetime-local" required>
+        </label>
+        <label class="field">
+          <span>Ends</span>
+          <input name="endsAt" type="datetime-local">
+        </label>
+      </div>
+      <label class="field">
+        <span>Description</span>
+        <textarea name="description"></textarea>
+      </label>
+      <button class="primary-button" type="submit">Create event</button>
+    </form>
+  `;
+}
+
+function renderAdminVotes() {
+  const loading = requireAdminData("Loading ballots...");
+  if (loading) return loading;
+  const ballots = state.admin.ballots || [];
+  const currentBallots = ballots.filter((ballot) => ballot.status !== "archived");
+  const archivedBallots = ballots.filter((ballot) => ballot.status === "archived");
+  const query = state.voteArchiveQuery.trim().toLowerCase();
+  const filteredArchived = query
+    ? archivedBallots.filter((ballot) =>
+        `${ballot.title} ${ballot.description} ${ballot.ballotType}`.toLowerCase().includes(query)
+      )
+    : archivedBallots;
+
+  return `
+    <section class="content-grid">
       <div class="two-column">
-        <div class="panel">
-          <div class="panel-header">
-            <div>
-              <h3>Publish announcement</h3>
-              <p>Published announcements create member notifications.</p>
-            </div>
-          </div>
-          <form class="form-stack" data-action="create-announcement">
-            <label class="field">
-              <span>Title</span>
-              <input name="title" required>
-            </label>
-            <label class="field">
-              <span>Category</span>
-              <select name="category">
-                <option value="announcement">Announcement</option>
-                <option value="article">Article</option>
-                <option value="board_update">Board update</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>Body</span>
-              <textarea name="body" required></textarea>
-            </label>
-            <button class="primary-button" type="submit">Publish</button>
-          </form>
+        <div class="content-grid">
+          ${currentBallots.length ? currentBallots.map(renderBallotCard).join("") : emptyState("No active or closed ballots have been created.")}
         </div>
-        <div class="panel">
-          <div class="panel-header">
-            <div>
-              <h3>Plan event</h3>
-              <p>Add meetings, programs, and community gatherings.</p>
+        <aside class="content-grid">
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <h3>Create ballot</h3>
+                <p>Create issue votes or executive board elections.</p>
+              </div>
             </div>
+            ${renderBallotForm()}
           </div>
-          <form class="form-stack" data-action="create-event">
-            <label class="field">
-              <span>Title</span>
-              <input name="title" required>
-            </label>
-            <label class="field">
-              <span>Location</span>
-              <input name="location">
-            </label>
-            <div class="form-grid">
-              <label class="field">
-                <span>Starts</span>
-                <input name="startsAt" type="datetime-local" required>
-              </label>
-              <label class="field">
-                <span>Ends</span>
-                <input name="endsAt" type="datetime-local">
-              </label>
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <h3>Ballot controls</h3>
+                <p>Open, close, or archive voting periods.</p>
+              </div>
             </div>
-            <label class="field">
-              <span>Description</span>
-              <textarea name="description"></textarea>
-            </label>
-            <button class="primary-button" type="submit">Create event</button>
-          </form>
-        </div>
+            ${renderAdminBallots(currentBallots)}
+          </div>
+        </aside>
       </div>
       <div class="panel">
         <div class="panel-header">
           <div>
-            <h3>Create ballot</h3>
-            <p>Use issue votes for decisions and election ballots for board members.</p>
+            <h3>Archived vote results</h3>
+            <p>Query past vote results without reopening or changing ballots.</p>
           </div>
         </div>
-        <form class="form-stack" data-action="create-ballot">
-          <div class="form-grid">
-            <label class="field">
-              <span>Title</span>
-              <input name="title" required>
-            </label>
-            <label class="field">
-              <span>Type</span>
-              <select name="ballotType">
-                <option value="issue">Issue vote</option>
-                <option value="election">Executive board election</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>Status</span>
-              <select name="status">
-                <option value="draft">Draft</option>
-                <option value="open">Open now</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>Related question ID</span>
-              <input name="questionId" type="number" min="1">
-            </label>
+        <form class="form-stack compact-form" data-action="filter-archived-votes">
+          <label class="field">
+            <span>Search archived votes</span>
+            <input name="query" value="${escapeHtml(state.voteArchiveQuery)}" placeholder="Search title, description, or type">
+          </label>
+          <div class="actions">
+            <button class="primary-button" type="submit">Search results</button>
+            <button class="ghost-button" data-click="reset-archived-votes" type="button">Reset</button>
           </div>
-          <label class="field">
-            <span>Description</span>
-            <textarea name="description"></textarea>
-          </label>
-          <label class="field">
-            <span>Options, one per line</span>
-            <textarea name="options" placeholder="Yes&#10;No&#10;Abstain"></textarea>
-          </label>
-          <button class="primary-button" type="submit">Create ballot</button>
         </form>
+        <div class="content-grid">
+          ${filteredArchived.length ? filteredArchived.map(renderBallotCard).join("") : emptyState("No archived vote results match this query.")}
+        </div>
       </div>
-      <div class="two-column">
-        <div class="panel">
-          <div class="panel-header">
-            <div>
-              <h3>Member questions</h3>
-              <p>Approve public discussion or close resolved items.</p>
-            </div>
+    </section>
+  `;
+}
+
+function renderBallotForm() {
+  return `
+    <form class="form-stack" data-action="create-ballot">
+      <div class="form-grid">
+        <label class="field">
+          <span>Title</span>
+          <input name="title" required>
+        </label>
+        <label class="field">
+          <span>Type</span>
+          <select name="ballotType">
+            <option value="issue">Issue vote</option>
+            <option value="election">Executive board election</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Status</span>
+          <select name="status">
+            <option value="draft">Draft</option>
+            <option value="open">Open now</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Related question ID</span>
+          <input name="questionId" type="number" min="1">
+        </label>
+        <label class="field">
+          <span>Last date to vote</span>
+          <input name="endsAt" type="datetime-local">
+        </label>
+      </div>
+      <label class="field">
+        <span>Description</span>
+        <textarea name="description"></textarea>
+      </label>
+      <label class="field">
+        <span>Options, one per line</span>
+        <textarea name="options" placeholder="Yes&#10;No&#10;Abstain"></textarea>
+      </label>
+      <button class="primary-button" type="submit">Create ballot</button>
+    </form>
+  `;
+}
+
+function renderAdminPayments() {
+  const loading = requireAdminData("Loading dues and donations...");
+  if (loading) return loading;
+
+  const rows = buildMemberPaymentRows();
+  const filteredRows = filterPaymentRows(rows);
+
+  return `
+    <section class="content-grid">
+      <div class="panel">
+        <div class="panel-header">
+          <div>
+            <h3>Dues and donations</h3>
+            <p>Track who has paid dues, who has donated, and what still needs review.</p>
           </div>
-          ${renderAdminQuestions()}
         </div>
-        <div class="panel">
-          <div class="panel-header">
-            <div>
-              <h3>Ballot controls</h3>
-              <p>Open or close voting periods.</p>
-            </div>
-          </div>
-          ${renderAdminBallots()}
+        <div class="view-tabs">
+          ${[
+            ["all", "All"],
+            ["dues_paid", "Dues paid"],
+            ["dues_unpaid", "Dues unpaid"],
+            ["donors", "Donors"],
+            ["pending", "Pending review"]
+          ]
+            .map(
+              ([key, label]) => `
+                <button class="tab-button ${state.adminPaymentFilter === key ? "active" : ""}" data-click="payment-filter" data-filter="${key}" type="button">
+                  ${label}
+                </button>
+              `
+            )
+            .join("")}
         </div>
+        ${renderPaymentStatusTable(filteredRows)}
       </div>
       <div class="panel">
         <div class="panel-header">
           <div>
             <h3>Payment review</h3>
-            <p>Confirm received dues and donations.</p>
+            <p>Confirm or cancel pending dues, donations, and registration fees.</p>
           </div>
         </div>
         ${renderPaymentTable(state.admin.payments || [], true)}
       </div>
+    </section>
+  `;
+}
+
+function buildMemberPaymentRows() {
+  const payments = state.admin.payments || [];
+  return (state.admin.members || []).map((member) => {
+    const memberPayments = payments.filter((payment) => Number(payment.userId) === Number(member.id));
+    const duesTotal = memberPayments
+      .filter((payment) => payment.purpose === "dues" && payment.status === "received")
+      .reduce((sum, payment) => sum + Number(payment.amountCents || 0), 0);
+    const donationTotal = memberPayments
+      .filter((payment) => payment.purpose === "donation" && payment.status === "received")
+      .reduce((sum, payment) => sum + Number(payment.amountCents || 0), 0);
+    const pendingCount = memberPayments.filter((payment) => payment.status === "pending").length;
+
+    return {
+      ...member,
+      duesPaid: duesTotal > 0,
+      duesTotal,
+      donationTotal,
+      pendingCount
+    };
+  });
+}
+
+function filterPaymentRows(rows) {
+  switch (state.adminPaymentFilter) {
+    case "dues_paid":
+      return rows.filter((row) => row.duesPaid);
+    case "dues_unpaid":
+      return rows.filter((row) => row.membershipStatus === "active" && !row.duesPaid);
+    case "donors":
+      return rows.filter((row) => row.donationTotal > 0);
+    case "pending":
+      return rows.filter((row) => row.pendingCount > 0);
+    default:
+      return rows;
+  }
+}
+
+function renderPaymentStatusTable(rows) {
+  if (!rows.length) return emptyState("No members match this payment filter.");
+
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Member</th>
+            <th>Status</th>
+            <th>Dues</th>
+            <th>Donations</th>
+            <th>Pending records</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows
+            .map(
+              (row) => `
+                <tr>
+                  <td>${escapeHtml(row.fullName)}<br><span class="muted">${escapeHtml(row.email)}</span></td>
+                  <td>${statusPill(row.membershipStatus)}</td>
+                  <td>${row.duesPaid ? `Paid ${formatMoney(row.duesTotal)}` : "Not paid"}</td>
+                  <td>${formatMoney(row.donationTotal)}</td>
+                  <td>${row.pendingCount}</td>
+                </tr>
+              `
+            )
+            .join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderAdminProfiles() {
+  const loading = requireAdminData("Loading member profiles...");
+  if (loading) return loading;
+
+  return `
+    <section class="panel">
+      <div class="panel-header">
+        <div>
+          <h3>Members and users</h3>
+          <p>Update contact details, roles, and account status.</p>
+        </div>
+      </div>
+      <form class="form-grid notification-filter-form" data-action="filter-members">
+        <label class="field">
+          <span>Filter</span>
+          <select name="scope">
+            <option value="all" ${state.memberFilter.scope === "all" ? "selected" : ""}>All users</option>
+            <option value="name" ${state.memberFilter.scope === "name" ? "selected" : ""}>User name</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>User name</span>
+          <input name="query" value="${escapeHtml(state.memberFilter.query)}" placeholder="Search first or last name">
+        </label>
+        <div class="filter-actions">
+          <button class="primary-button" type="submit">Apply filter</button>
+          <button class="ghost-button" data-click="reset-member-filter" type="button">Reset</button>
+        </div>
+      </form>
+      ${renderMembersTable()}
+    </section>
+  `;
+}
+
+function renderAdminNotifications() {
+  if (state.user.role !== "admin") {
+    return emptyState("Admin access is required.");
+  }
+
+  if (!state.admin || !state.adminNotifications) {
+    queueMicrotask(async () => {
+      if (!state.admin) await loadAdminSummary();
+      if (!state.adminNotifications) await loadAdminNotifications();
+      render();
+    });
+    return emptyState("Loading notification audit records...");
+  }
+
+  const notifications = state.adminNotifications || [];
+
+  return `
+    <section class="admin-section">
       <div class="panel">
         <div class="panel-header">
           <div>
-            <h3>Members</h3>
-            <p>Registered organization accounts.</p>
+            <h3>Notification audit</h3>
+            <p>Filter notifications by date and member, then export the result.</p>
+          </div>
+          <button class="secondary-button" data-click="export-notifications" type="button">Export CSV</button>
+        </div>
+        <form class="form-grid notification-filter-form" data-action="filter-notifications">
+          <label class="field">
+            <span>User</span>
+            <select name="userId">
+              <option value="">All users</option>
+              ${(state.admin.members || [])
+                .map(
+                  (member) => `
+                    <option value="${member.id}" ${String(state.notificationFilters.userId) === String(member.id) ? "selected" : ""}>
+                      ${escapeHtml(member.fullName)} (${escapeHtml(member.email)})
+                    </option>
+                  `
+                )
+                .join("")}
+            </select>
+          </label>
+          <label class="field">
+            <span>From date</span>
+            <input name="dateFrom" type="date" value="${escapeHtml(state.notificationFilters.dateFrom)}">
+          </label>
+          <label class="field">
+            <span>To date</span>
+            <input name="dateTo" type="date" value="${escapeHtml(state.notificationFilters.dateTo)}">
+          </label>
+          <div class="filter-actions">
+            <button class="primary-button" type="submit">Apply filters</button>
+            <button class="ghost-button" data-click="reset-notification-filters" type="button">Reset</button>
+          </div>
+        </form>
+      </div>
+      <div class="panel">
+        <div class="panel-header">
+          <div>
+            <h3>Results</h3>
+            <p>${notifications.length} notification${notifications.length === 1 ? "" : "s"} found.</p>
           </div>
         </div>
-        ${renderMembersTable()}
+        ${renderAdminNotificationTable(notifications)}
       </div>
     </section>
+  `;
+}
+
+function renderAdminNotificationTable(notifications) {
+  if (!notifications.length) return emptyState("No notifications match the selected filters.");
+
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>User</th>
+            <th>Type</th>
+            <th>Title</th>
+            <th>Body</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${notifications
+            .map(
+              (notification) => `
+                <tr>
+                  <td>${formatDate(notification.createdAt)}</td>
+                  <td>${escapeHtml(notification.userName)}<br><span class="muted">${escapeHtml(notification.userEmail)}</span></td>
+                  <td>${escapeHtml(notification.type)}</td>
+                  <td>${escapeHtml(notification.title)}</td>
+                  <td>${escapeHtml(notification.body)}</td>
+                  <td>${notification.readAt ? `Read ${formatDate(notification.readAt)}` : "Unread"}</td>
+                </tr>
+              `
+            )
+            .join("")}
+        </tbody>
+      </table>
+    </div>
   `;
 }
 
@@ -1118,11 +1670,13 @@ function renderAdminQuestions() {
                 ${statusPill(question.status)}
               </div>
               <div class="item-meta">
+                <span>${question.contentType === "article" ? "Article submission" : "Question"}</span>
                 <span>${escapeHtml(question.authorName)}</span>
                 <span>${formatDate(question.createdAt)}</span>
               </div>
               <div class="actions">
                 <button class="secondary-button" data-click="question-action" data-question-id="${question.id}" data-action-name="publish" type="button">Publish</button>
+                <button class="secondary-button" data-click="question-article" data-question-id="${question.id}" type="button">Publish as article</button>
                 <button class="danger-button" data-click="question-action" data-question-id="${question.id}" data-action-name="close" type="button">Close</button>
               </div>
             </article>
@@ -1185,8 +1739,7 @@ function renderPendingApprovals(members) {
   `;
 }
 
-function renderAdminBallots() {
-  const ballots = state.admin.ballots || [];
+function renderAdminBallots(ballots = state.admin.ballots || []) {
   if (!ballots.length) return emptyState("No ballots have been created.");
 
   return `
@@ -1205,6 +1758,7 @@ function renderAdminBallots() {
               <div class="actions">
                 <button class="secondary-button" data-click="ballot-status" data-ballot-id="${ballot.id}" data-status="open" type="button">Open</button>
                 <button class="danger-button" data-click="ballot-status" data-ballot-id="${ballot.id}" data-status="close" type="button">Close</button>
+                <button class="ghost-button" data-click="ballot-archive" data-ballot-id="${ballot.id}" type="button">Archive</button>
               </div>
             </article>
           `
@@ -1215,46 +1769,89 @@ function renderAdminBallots() {
 }
 
 function renderMembersTable() {
-  const members = state.admin.members || [];
+  const members = filteredMembers();
   if (!members.length) return emptyState("No members are registered.");
 
   return `
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Email</th>
-            <th>Role</th>
-            <th>Status</th>
-            <th>Onboarding</th>
-            <th>Location</th>
-            <th>Joined</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${members
-            .map(
-              (member) => `
-                <tr>
-                  <td>${escapeHtml(member.fullName)}</td>
-                  <td>${escapeHtml(member.email)}</td>
-                  <td>${escapeHtml(member.role)}</td>
-                  <td>${statusPill(member.membershipStatus)}</td>
-                  <td>
-                    ${member.passwordMustChange ? "Password reset required" : "Password set"}<br>
-                    <span class="muted">${member.policyAcceptedAt ? "Policy signed" : "Policy not signed"}</span>
-                  </td>
-                  <td>${escapeHtml([member.city, member.state].filter(Boolean).join(", "))}</td>
-                  <td>${formatDate(member.createdAt, { dateOnly: true })}</td>
-                </tr>
-              `
-            )
-            .join("")}
-        </tbody>
-      </table>
+    <div class="item-list">
+      ${members
+        .map(
+          (member) => `
+            <article class="item-card">
+              <div class="panel-header">
+                <div>
+                  <h4>${escapeHtml(member.fullName)}</h4>
+                  <p>${escapeHtml(member.email)} · Joined ${formatDate(member.createdAt, { dateOnly: true })}</p>
+                </div>
+                ${statusPill(member.membershipStatus)}
+              </div>
+              <form class="form-stack" data-action="admin-update-member" data-member-id="${member.id}">
+                <div class="form-grid">
+                  <label class="field">
+                    <span>First name</span>
+                    <input name="firstName" value="${escapeHtml(member.firstName)}" required>
+                  </label>
+                  <label class="field">
+                    <span>Last name</span>
+                    <input name="lastName" value="${escapeHtml(member.lastName)}" required>
+                  </label>
+                  <label class="field">
+                    <span>Email</span>
+                    <input name="email" type="email" value="${escapeHtml(member.email)}" required>
+                  </label>
+                  <label class="field">
+                    <span>Phone</span>
+                    <input name="phone" value="${escapeHtml(member.phone)}">
+                  </label>
+                  <label class="field">
+                    <span>City</span>
+                    <input name="city" value="${escapeHtml(member.city)}">
+                  </label>
+                  <label class="field">
+                    <span>State</span>
+                    <input name="state" value="${escapeHtml(member.state)}">
+                  </label>
+                  <label class="field">
+                    <span>Role</span>
+                    <select name="role">
+                      <option value="member" ${member.role === "member" ? "selected" : ""}>Member</option>
+                      <option value="admin" ${member.role === "admin" ? "selected" : ""}>Admin</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>Account status</span>
+                    <select name="membershipStatus">
+                      ${["pending_approval", "pending_policy", "pending_fee", "active", "inactive", "suspended", "rejected"]
+                        .map((status) => `<option value="${status}" ${member.membershipStatus === status ? "selected" : ""}>${status}</option>`)
+                        .join("")}
+                    </select>
+                  </label>
+                </div>
+                <div class="item-meta">
+                  <span>${member.passwordMustChange ? "Password reset required" : "Password set"}</span>
+                  <span>${member.policyAcceptedAt ? "Policy signed" : "Policy not signed"}</span>
+                </div>
+                <button class="primary-button" type="submit">Save user details</button>
+              </form>
+            </article>
+          `
+        )
+        .join("")}
     </div>
   `;
+}
+
+function filteredMembers() {
+  const members = state.admin.members || [];
+  const query = state.memberFilter.query.trim().toLowerCase();
+
+  if (state.memberFilter.scope !== "name" || !query) {
+    return members;
+  }
+
+  return members.filter((member) =>
+    `${member.firstName} ${member.lastName} ${member.fullName}`.toLowerCase().includes(query)
+  );
 }
 
 function formPayload(form) {
@@ -1393,7 +1990,7 @@ async function handleSubmit(event) {
         body: JSON.stringify(payload)
       });
       form.reset();
-      state.message = "Question submitted for admin review.";
+      state.message = payload.contentType === "article" ? "Article submitted for admin review." : "Question submitted for admin review.";
       state.messageType = "ok";
       await refreshAll({ includeAdmin: state.user.role === "admin" });
       return;
@@ -1486,6 +2083,17 @@ async function handleSubmit(event) {
       return;
     }
 
+    if (action === "admin-update-member") {
+      await api(`/api/admin/members/${form.dataset.memberId}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload)
+      });
+      state.message = "User details updated.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
     if (action === "clear-old-notifications") {
       const result = await api("/api/admin/notifications/clear-old", {
         method: "POST",
@@ -1494,6 +2102,32 @@ async function handleSubmit(event) {
       state.message = `${result.deletedCount} old notification${result.deletedCount === 1 ? "" : "s"} cleared.`;
       state.messageType = "ok";
       await refreshAll({ includeAdmin: true });
+      return;
+    }
+
+    if (action === "filter-notifications") {
+      state.notificationFilters = {
+        userId: payload.userId || "",
+        dateFrom: payload.dateFrom || "",
+        dateTo: payload.dateTo || ""
+      };
+      await loadAdminNotifications();
+      render();
+      return;
+    }
+
+    if (action === "filter-members") {
+      state.memberFilter = {
+        scope: payload.scope === "name" ? "name" : "all",
+        query: payload.query || ""
+      };
+      render();
+      return;
+    }
+
+    if (action === "filter-archived-votes") {
+      state.voteArchiveQuery = payload.query || "";
+      render();
     }
   } catch (error) {
     state.message = error.message;
@@ -1515,8 +2149,12 @@ async function handleClick(event) {
   const viewButton = event.target.closest("[data-view]");
   if (viewButton) {
     state.view = viewButton.dataset.view;
-    if (state.view === "admin" && !state.admin) {
+    if (state.user?.role === "admin" && !state.admin) {
       await loadAdminSummary();
+    }
+    if (state.view === "notifications") {
+      if (!state.admin) await loadAdminSummary();
+      if (!state.adminNotifications) await loadAdminNotifications();
     }
     render();
     return;
@@ -1533,6 +2171,7 @@ async function handleClick(event) {
       state.user = null;
       state.data = null;
       state.admin = null;
+      state.adminNotifications = null;
       state.message = "";
       state.messageType = "";
       render();
@@ -1540,7 +2179,52 @@ async function handleClick(event) {
     }
 
     if (action === "refresh") {
-      await refreshAll({ includeAdmin: state.view === "admin" });
+      await refreshAll({ includeAdmin: state.user?.role === "admin" });
+      return;
+    }
+
+    if (action === "payment-filter") {
+      state.adminPaymentFilter = button.dataset.filter || "all";
+      render();
+      return;
+    }
+
+    if (action === "reset-member-filter") {
+      state.memberFilter = { scope: "all", query: "" };
+      render();
+      return;
+    }
+
+    if (action === "reset-archived-votes") {
+      state.voteArchiveQuery = "";
+      render();
+      return;
+    }
+
+    if (action === "reset-notification-filters") {
+      state.notificationFilters = { userId: "", dateFrom: "", dateTo: "" };
+      await loadAdminNotifications();
+      render();
+      return;
+    }
+
+    if (action === "export-notifications") {
+      const rows = [
+        ["Notification ID", "Created At", "Read At", "User ID", "User Name", "User Email", "Type", "Title", "Body", "Link"],
+        ...(state.adminNotifications || []).map((notification) => [
+          notification.id,
+          notification.createdAt,
+          notification.readAt || "",
+          notification.userId,
+          notification.userName,
+          notification.userEmail,
+          notification.type,
+          notification.title,
+          notification.body,
+          notification.link
+        ])
+      ];
+      downloadCsv(`237-ville-notifications-${new Date().toISOString().slice(0, 10)}.csv`, rows);
       return;
     }
 
@@ -1586,12 +2270,34 @@ async function handleClick(event) {
       return;
     }
 
+    if (action === "question-article") {
+      await api(`/api/admin/questions/${button.dataset.questionId}/publish-article`, {
+        method: "POST",
+        body: "{}"
+      });
+      state.message = "Member submission published as an article.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
     if (action === "ballot-status") {
       await api(`/api/admin/ballots/${button.dataset.ballotId}/${button.dataset.status}`, {
         method: "POST",
         body: "{}"
       });
       state.message = "Ballot updated.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
+    if (action === "ballot-archive") {
+      await api(`/api/admin/ballots/${button.dataset.ballotId}/archive`, {
+        method: "POST",
+        body: "{}"
+      });
+      state.message = "Ballot archived.";
       state.messageType = "ok";
       await refreshAll({ includeAdmin: true });
       return;

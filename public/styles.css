@@ -468,7 +468,8 @@ a {
 
 .status-pill.closed,
 .status-pill.cancelled,
-.status-pill.rejected {
+.status-pill.rejected,
+.status-pill.archived {
   background: var(--soft-red);
   color: var(--red);
 }
@@ -555,6 +556,27 @@ a {
 
 .compact-form {
   max-width: 360px;
+}
+
+.notification-cleanup {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.filter-actions {
+  display: flex;
+  align-items: end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.notification-filter-form {
+  align-items: end;
 }
 
 .admin-section {

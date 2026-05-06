@@ -320,6 +320,29 @@ async function listAnnouncements(limit = 30) {
   }));
 }
 
+async function listAdminAnnouncements(limit = 100) {
+  const { rows } = await query(
+    `
+      SELECT announcements.*, users.full_name AS author_name
+      FROM announcements
+      LEFT JOIN users ON users.id = announcements.created_by
+      ORDER BY announcements.created_at DESC
+      LIMIT $1
+    `,
+    [limit]
+  );
+  return rows.map((row) => ({
+    id: Number(row.id),
+    title: row.title,
+    body: row.body,
+    category: row.category,
+    status: row.status,
+    authorName: row.author_name || "237 Ville",
+    publishedAt: row.published_at,
+    createdAt: row.created_at
+  }));
+}
+
 async function listEvents(limit = 30) {
   const { rows } = await query(
     `
@@ -344,10 +367,33 @@ async function listEvents(limit = 30) {
   }));
 }
 
+async function listAdminEvents(limit = 100) {
+  const { rows } = await query(
+    `
+      SELECT events.*, users.full_name AS author_name
+      FROM events
+      LEFT JOIN users ON users.id = events.created_by
+      ORDER BY events.starts_at DESC
+      LIMIT $1
+    `,
+    [limit]
+  );
+
+  return rows.map((row) => ({
+    id: Number(row.id),
+    title: row.title,
+    description: row.description || "",
+    location: row.location || "",
+    startsAt: row.starts_at,
+    endsAt: row.ends_at,
+    authorName: row.author_name || "237 Ville"
+  }));
+}
+
 async function listQuestions({ includePending = false } = {}) {
   const statusFilter = includePending
     ? "member_questions.status IN ('pending', 'published', 'closed')"
-    : "member_questions.status = 'published'";
+    : "member_questions.status = 'published' AND member_questions.content_type = 'question'";
 
   const { rows } = await query(
     `
@@ -389,6 +435,7 @@ async function listQuestions({ includePending = false } = {}) {
 
   return rows.map((row) => ({
     id: Number(row.id),
+    contentType: row.content_type || "question",
     title: row.title,
     body: row.body,
     status: row.status,
@@ -399,9 +446,26 @@ async function listQuestions({ includePending = false } = {}) {
   }));
 }
 
-async function listBallots(user, { includeDrafts = false } = {}) {
+async function closeExpiredBallots() {
+  await query(
+    `
+      UPDATE ballots
+      SET status = 'closed',
+          updated_at = now()
+      WHERE status = 'open'
+        AND ends_at IS NOT NULL
+        AND ends_at < now()
+    `
+  );
+}
+
+async function listBallots(user, { includeDrafts = false, includeArchived = false } = {}) {
+  await closeExpiredBallots();
+
   const statusClause = includeDrafts
-    ? "TRUE"
+    ? includeArchived
+      ? "TRUE"
+      : "ballots.status <> 'archived'"
     : "ballots.status IN ('open', 'closed')";
 
   const { rows } = await query(
@@ -411,7 +475,7 @@ async function listBallots(user, { includeDrafts = false } = {}) {
       LEFT JOIN member_questions ON member_questions.id = ballots.question_id
       WHERE ${statusClause}
       ORDER BY
-        CASE ballots.status WHEN 'open' THEN 0 WHEN 'draft' THEN 1 ELSE 2 END,
+        CASE ballots.status WHEN 'open' THEN 0 WHEN 'draft' THEN 1 WHEN 'closed' THEN 2 ELSE 3 END,
         ballots.created_at DESC
       LIMIT 50
     `
@@ -536,6 +600,44 @@ async function listNotifications(user) {
 
   return rows.map((row) => ({
     id: Number(row.id),
+    type: row.type,
+    title: row.title,
+    body: row.body || "",
+    link: row.link || "",
+    readAt: row.read_at,
+    createdAt: row.created_at
+  }));
+}
+
+async function listAdminNotifications({ userId = "", dateFrom = "", dateTo = "" } = {}) {
+  const selectedUserId = userId ? Number(userId) : null;
+
+  if (selectedUserId && (!Number.isInteger(selectedUserId) || selectedUserId <= 0)) {
+    throw Object.assign(new Error("Invalid user filter."), { statusCode: 400 });
+  }
+
+  const { rows } = await query(
+    `
+      SELECT
+        notifications.*,
+        users.full_name AS user_name,
+        users.email AS user_email
+      FROM notifications
+      JOIN users ON users.id = notifications.user_id
+      WHERE ($1::bigint IS NULL OR notifications.user_id = $1)
+        AND ($2::text = '' OR notifications.created_at >= $2::date)
+        AND ($3::text = '' OR notifications.created_at < ($3::date + interval '1 day'))
+      ORDER BY notifications.created_at DESC
+      LIMIT 5000
+    `,
+    [selectedUserId, String(dateFrom || ""), String(dateTo || "")]
+  );
+
+  return rows.map((row) => ({
+    id: Number(row.id),
+    userId: Number(row.user_id),
+    userName: row.user_name,
+    userEmail: row.user_email,
     type: row.type,
     title: row.title,
     body: row.body || "",
@@ -1014,14 +1116,15 @@ async function handleApi(req, res, url) {
     if (!user) return;
     const payload = await readJson(req);
     requireFields(payload, ["title", "body"]);
+    const contentType = payload.contentType === "article" ? "article" : "question";
 
     const { rows } = await query(
       `
-        INSERT INTO member_questions (user_id, title, body)
-        VALUES ($1, $2, $3)
+        INSERT INTO member_questions (user_id, content_type, title, body)
+        VALUES ($1, $2, $3, $4)
         RETURNING *
       `,
-      [user.id, String(payload.title).trim(), String(payload.body).trim()]
+      [user.id, contentType, String(payload.title).trim(), String(payload.body).trim()]
     );
 
     return sendJson(res, 201, { question: rows[0] });
@@ -1082,6 +1185,56 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { question: rows[0] });
   }
 
+  const adminQuestionArticleMatch = pathname.match(/^\/api\/admin\/questions\/(\d+)\/publish-article$/);
+  if (method === "POST" && adminQuestionArticleMatch) {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    const questionId = parseId(adminQuestionArticleMatch[1]);
+
+    const questionResult = await query(
+      `
+        SELECT member_questions.*, users.full_name AS author_name
+        FROM member_questions
+        JOIN users ON users.id = member_questions.user_id
+        WHERE member_questions.id = $1
+      `,
+      [questionId]
+    );
+
+    const question = questionResult.rows[0];
+    if (!question) {
+      return sendError(res, 404, "Question not found.");
+    }
+
+    const { rows } = await query(
+      `
+        INSERT INTO announcements (title, body, category, status, created_by, published_at)
+        VALUES ($1, $2, 'article', 'published', $3, now())
+        RETURNING *
+      `,
+      [
+        question.title,
+        `${question.body}\n\nSubmitted by ${question.author_name}.`,
+        admin.id
+      ]
+    );
+
+    await query(
+      `
+        UPDATE member_questions
+        SET status = 'closed',
+            published_at = COALESCE(published_at, now()),
+            updated_at = now()
+        WHERE id = $1
+      `,
+      [questionId]
+    );
+
+    await createAnnouncementNotifications(rows[0]);
+
+    return sendJson(res, 201, { announcement: rows[0] });
+  }
+
   if (method === "GET" && pathname === "/api/ballots") {
     const user = await requireActiveUser(req, res);
     if (!user) return;
@@ -1095,7 +1248,7 @@ async function handleApi(req, res, url) {
     requireFields(payload, ["title", "ballotType"]);
 
     const ballotType = payload.ballotType === "election" ? "election" : "issue";
-    const status = ["draft", "open", "closed"].includes(payload.status) ? payload.status : "draft";
+    const status = ["draft", "open", "closed", "archived"].includes(payload.status) ? payload.status : "draft";
     const options = Array.isArray(payload.options)
       ? payload.options
           .map((option) => ({
@@ -1114,6 +1267,10 @@ async function handleApi(req, res, url) {
 
     if (finalOptions.length < 2) {
       return sendError(res, 400, "A ballot needs at least two options.");
+    }
+
+    if (status === "open" && payload.endsAt && new Date(payload.endsAt) <= new Date()) {
+      return sendError(res, 400, "The last date to vote must be in the future for an open ballot.");
     }
 
     const ballot = await withTransaction(async (client) => {
@@ -1158,6 +1315,16 @@ async function handleApi(req, res, url) {
     if (!admin) return;
     const ballotId = parseId(ballotStatusMatch[1]);
     const status = ballotStatusMatch[2] === "open" ? "open" : "closed";
+    if (status === "open") {
+      const ballotResult = await query("SELECT ends_at FROM ballots WHERE id = $1", [ballotId]);
+      const ballot = ballotResult.rows[0];
+      if (!ballot) {
+        return sendError(res, 404, "Ballot not found.");
+      }
+      if (ballot.ends_at && new Date(ballot.ends_at) <= new Date()) {
+        return sendError(res, 400, "Update the last date to vote before reopening this ballot.");
+      }
+    }
     const { rows } = await query(
       `
         UPDATE ballots
@@ -1178,10 +1345,35 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { ballot: rows[0] });
   }
 
+  const ballotArchiveMatch = pathname.match(/^\/api\/admin\/ballots\/(\d+)\/archive$/);
+  if (method === "POST" && ballotArchiveMatch) {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    const ballotId = parseId(ballotArchiveMatch[1]);
+    const { rows } = await query(
+      `
+        UPDATE ballots
+        SET status = 'archived',
+            ends_at = COALESCE(ends_at, now()),
+            updated_at = now()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [ballotId]
+    );
+
+    if (rows.length === 0) {
+      return sendError(res, 404, "Ballot not found.");
+    }
+
+    return sendJson(res, 200, { ballot: rows[0] });
+  }
+
   const voteMatch = pathname.match(/^\/api\/ballots\/(\d+)\/vote$/);
   if (method === "POST" && voteMatch) {
     const user = await requireActiveUser(req, res);
     if (!user) return;
+    await closeExpiredBallots();
     const ballotId = parseId(voteMatch[1]);
     const payload = await readJson(req);
     const optionId = parseId(payload.optionId);
@@ -1324,6 +1516,65 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { member: toUser(rows[0]) });
   }
 
+  const memberUpdateMatch = pathname.match(/^\/api\/admin\/members\/(\d+)$/);
+  if (method === "PATCH" && memberUpdateMatch) {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    const memberId = parseId(memberUpdateMatch[1]);
+    const payload = await readJson(req);
+    const firstName = String(payload.firstName || "").trim();
+    const lastName = String(payload.lastName || "").trim();
+    const fullName = buildFullName(firstName, lastName);
+    const role = payload.role === "admin" ? "admin" : "member";
+    const allowedStatuses = ["pending_approval", "pending_policy", "pending_fee", "active", "inactive", "suspended", "rejected"];
+    const membershipStatus = allowedStatuses.includes(payload.membershipStatus) ? payload.membershipStatus : "active";
+
+    requireFields({ ...payload, firstName, lastName, fullName }, ["email", "firstName", "lastName"]);
+
+    try {
+      const { rows } = await query(
+        `
+          UPDATE users
+          SET email = $2,
+              first_name = $3,
+              last_name = $4,
+              full_name = $5,
+              phone = $6,
+              city = $7,
+              state = $8,
+              role = $9,
+              membership_status = $10,
+              updated_at = now()
+          WHERE id = $1
+          RETURNING *
+        `,
+        [
+          memberId,
+          normalizeEmail(payload.email),
+          firstName,
+          lastName,
+          fullName,
+          String(payload.phone || ""),
+          String(payload.city || ""),
+          String(payload.state || ""),
+          role,
+          membershipStatus
+        ]
+      );
+
+      if (rows.length === 0) {
+        return sendError(res, 404, "Member not found.");
+      }
+
+      return sendJson(res, 200, { member: toUser(rows[0]) });
+    } catch (error) {
+      if (error.code === "23505") {
+        return sendError(res, 409, "Another account already uses that email.");
+      }
+      throw error;
+    }
+  }
+
   const paymentStatusMatch = pathname.match(/^\/api\/admin\/payments\/(\d+)\/status$/);
   if (method === "PATCH" && paymentStatusMatch) {
     const admin = await requireAdmin(req, res);
@@ -1422,16 +1673,31 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { deletedCount: rowCount });
   }
 
+  if (method === "GET" && pathname === "/api/admin/notifications") {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+
+    const notifications = await listAdminNotifications({
+      userId: url.searchParams.get("userId") || "",
+      dateFrom: url.searchParams.get("dateFrom") || "",
+      dateTo: url.searchParams.get("dateTo") || ""
+    });
+
+    return sendJson(res, 200, { notifications });
+  }
+
   if (method === "GET" && pathname === "/api/admin/summary") {
     const admin = await requireAdmin(req, res);
     if (!admin) return;
-    const [members, questions, payments, ballots] = await Promise.all([
+    const [members, questions, payments, ballots, announcements, events] = await Promise.all([
       listMembers(),
       listQuestions({ includePending: true }),
       listPayments(admin, { includeAll: true }),
-      listBallots(admin, { includeDrafts: true })
+      listBallots(admin, { includeDrafts: true, includeArchived: true }),
+      listAdminAnnouncements(),
+      listAdminEvents()
     ]);
-    return sendJson(res, 200, { members, questions, payments, ballots });
+    return sendJson(res, 200, { members, questions, payments, ballots, announcements, events });
   }
 
   return sendError(res, 404, "API route not found.");

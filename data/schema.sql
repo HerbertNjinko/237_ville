@@ -93,6 +93,7 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE TABLE IF NOT EXISTS member_questions (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  content_type TEXT NOT NULL DEFAULT 'question' CHECK (content_type IN ('question', 'article')),
   title TEXT NOT NULL,
   body TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'published', 'closed')),
@@ -100,6 +101,10 @@ CREATE TABLE IF NOT EXISTS member_questions (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE member_questions ADD COLUMN IF NOT EXISTS content_type TEXT NOT NULL DEFAULT 'question';
+ALTER TABLE member_questions DROP CONSTRAINT IF EXISTS member_questions_content_type_check;
+ALTER TABLE member_questions ADD CONSTRAINT member_questions_content_type_check CHECK (content_type IN ('question', 'article'));
 
 CREATE TABLE IF NOT EXISTS question_comments (
   id BIGSERIAL PRIMARY KEY,
@@ -114,7 +119,7 @@ CREATE TABLE IF NOT EXISTS ballots (
   title TEXT NOT NULL,
   description TEXT DEFAULT '',
   ballot_type TEXT NOT NULL CHECK (ballot_type IN ('issue', 'election')),
-  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'open', 'closed')),
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'open', 'closed', 'archived')),
   question_id BIGINT REFERENCES member_questions(id) ON DELETE SET NULL,
   starts_at TIMESTAMPTZ,
   ends_at TIMESTAMPTZ,
@@ -122,6 +127,9 @@ CREATE TABLE IF NOT EXISTS ballots (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE ballots DROP CONSTRAINT IF EXISTS ballots_status_check;
+ALTER TABLE ballots ADD CONSTRAINT ballots_status_check CHECK (status IN ('draft', 'open', 'closed', 'archived'));
 
 CREATE TABLE IF NOT EXISTS ballot_options (
   id BIGSERIAL PRIMARY KEY,
