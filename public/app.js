@@ -1,5 +1,6 @@
 const app = document.querySelector("#app");
 const companyLogoSrc = "/assets/237ville%20logo.png";
+const donateImageSrc = "/assets/donate.png";
 
 const state = {
   user: null,
@@ -13,6 +14,16 @@ const state = {
     scope: "all",
     query: ""
   },
+  aboutArticleFilters: {
+    status: "all",
+    query: ""
+  },
+  editingAboutArticleId: null,
+  leadershipFilters: {
+    status: "all",
+    query: ""
+  },
+  editingLeadershipPositionId: null,
   voteArchiveQuery: "",
   notificationFilters: {
     userId: "",
@@ -30,6 +41,7 @@ const memberViews = [
   ["announcements", "Announcements"],
   ["votes", "Votes"],
   ["events", "Events"],
+  ["social", "Social coordinator"],
   ["questions", "Questions"],
   ["financials", "Financials"],
   ["payments", "Dues and donations"],
@@ -42,6 +54,7 @@ const adminViews = [
   ["announcements", "Announcements"],
   ["questions", "Questions"],
   ["events", "Events"],
+  ["social", "Social coordinator"],
   ["votes", "Votes"],
   ["payments", "Dues and donations"],
   ["payment-details", "Payment details"],
@@ -61,7 +74,9 @@ function escapeHtml(value = "") {
 
 function formatDate(value, options = {}) {
   if (!value) return "Not set";
-  const date = new Date(value);
+  const date = options.dateOnly && /^\d{4}-\d{2}-\d{2}/.test(String(value))
+    ? new Date(Number(String(value).slice(0, 4)), Number(String(value).slice(5, 7)) - 1, Number(String(value).slice(8, 10)))
+    : new Date(value);
   if (Number.isNaN(date.getTime())) return "Not set";
 
   return new Intl.DateTimeFormat("en", {
@@ -440,6 +455,8 @@ function renderPublicFormPage(about) {
   const isDonate = state.authMode === "donate";
   const formAction = isDonate ? "anonymous-donation" : isRegister ? "register" : "login";
   const heading = isDonate ? "Make a donation" : isRegister ? "Create member account" : "Member sign in";
+  const introImageSrc = isDonate ? donateImageSrc : companyLogoSrc;
+  const introImageAlt = isDonate ? "Donate to 237 Ville" : "237 Ville logo";
 
   return `
     <section class="public-action-layout">
@@ -448,7 +465,7 @@ function renderPublicFormPage(about) {
           <h1>237 Ville</h1>
           <p>${escapeHtml(about.summary || "Stay connected to the organization, participate in votes, follow events, and support the community.")}</p>
         </div>
-        <img class="public-intro-logo" src="${companyLogoSrc}" alt="237 Ville logo">
+        <img class="public-intro-logo ${isDonate ? "donate-image" : ""}" src="${introImageSrc}" alt="${introImageAlt}">
       </aside>
       <div class="public-form-card">
         <h2>${heading}</h2>
@@ -790,6 +807,7 @@ function topbarSubtitle() {
       announcements: "Publish and review organization announcements and member-sourced articles.",
       questions: "Review member questions, publish discussions, or turn submissions into articles.",
       events: "Create and manage organization events.",
+      social: "Assign monthly meeting food, drinks, hosting, and resource requests.",
       votes: "Create ballots, open voting, close voting, and review aggregate results.",
       payments: "Track dues, donations, pending payments, and members who have not paid dues.",
       "payment-details": "Update the payment handles and instructions shown during payment submission.",
@@ -805,6 +823,7 @@ function topbarSubtitle() {
     announcements: "Published updates and articles from 237 Ville.",
     votes: "Open and closed issues, elections, and aggregate results.",
     events: "Upcoming community meetings, programs, and planned events.",
+    social: "Monthly meeting assignments and organization resource requests.",
     questions: "Member questions approved for community discussion.",
     financials: "Published donations and organization expenditures.",
     payments: "Record dues and donations for admin review.",
@@ -826,6 +845,8 @@ function renderView() {
         return renderAdminQuestionsPage();
       case "events":
         return renderAdminEvents();
+      case "social":
+        return renderAdminSocialCoordinator();
       case "votes":
         return renderAdminVotes();
       case "payments":
@@ -850,6 +871,8 @@ function renderView() {
       return renderVotes();
     case "events":
       return renderEvents();
+    case "social":
+      return renderSocialCoordinator();
     case "questions":
       return renderQuestions();
     case "financials":
@@ -1653,16 +1676,16 @@ function renderAdminAbout() {
         <div class="panel">
           <div class="panel-header">
             <div>
-              <h3>Public articles</h3>
-              <p>Articles published here are displayed on the public home page.</p>
+              <h3>Public publications</h3>
+              <p>Manage home page articles, images, visibility, and removal.</p>
             </div>
           </div>
-          ${renderAdminPublicArticleList(about.articles || [])}
+          ${renderAboutPublicationManager(about.articles || [])}
         </div>
         <aside class="panel">
           <div class="panel-header">
             <div>
-              <h3>Add public article</h3>
+              <h3>Add publication</h3>
               <p>Publish an article and optional image on the public home page.</p>
             </div>
           </div>
@@ -1674,10 +1697,10 @@ function renderAdminAbout() {
           <div class="panel-header">
             <div>
               <h3>Leadership positions</h3>
-              <p>Images and position details displayed on the public About page.</p>
+              <p>Manage current, hidden, and archived organization leaders.</p>
             </div>
           </div>
-          ${renderAdminLeadershipList(about.positions || [])}
+          ${renderLeadershipPositionManager(about.positions || [])}
         </div>
         <aside class="panel">
           <div class="panel-header">
@@ -1727,26 +1750,116 @@ function renderPublicArticleForm(article = null) {
         <input name="image" type="file" accept="image/png,image/jpeg,image/webp">
       </label>
       ${article?.image?.dataUrl ? `<img class="leadership-thumb" src="${escapeHtml(article.image.dataUrl)}" alt="${escapeHtml(article.title)}">` : ""}
-      <button class="primary-button" type="submit">${isEdit ? "Save public article" : "Publish article"}</button>
+      <div class="actions">
+        <button class="primary-button" type="submit">${isEdit ? "Save publication" : "Publish article"}</button>
+        ${isEdit ? `<button class="ghost-button" data-click="cancel-about-article-edit" type="button">Cancel</button>` : ""}
+      </div>
     </form>
   `;
 }
 
+function renderAboutPublicationManager(articles) {
+  const counts = {
+    all: articles.length,
+    published: articles.filter((article) => article.status === "published").length,
+    hidden: articles.filter((article) => article.status === "hidden").length
+  };
+
+  return `
+    <div class="metric-grid compact-metrics">
+      <div class="metric"><span>Total</span><strong>${counts.all}</strong></div>
+      <div class="metric"><span>Published</span><strong>${counts.published}</strong></div>
+      <div class="metric"><span>Hidden</span><strong>${counts.hidden}</strong></div>
+      <div class="metric"><span>Showing</span><strong>${filteredAboutArticles(articles).length}</strong></div>
+    </div>
+    <form class="publication-toolbar" data-action="filter-about-articles">
+      <label class="field">
+        <span>Status</span>
+        <select name="status">
+          <option value="all" ${state.aboutArticleFilters.status === "all" ? "selected" : ""}>All publications</option>
+          <option value="published" ${state.aboutArticleFilters.status === "published" ? "selected" : ""}>Published only</option>
+          <option value="hidden" ${state.aboutArticleFilters.status === "hidden" ? "selected" : ""}>Hidden only</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Search title or body</span>
+        <input name="query" value="${escapeHtml(state.aboutArticleFilters.query)}" placeholder="Search publications">
+      </label>
+      <div class="filter-actions">
+        <button class="secondary-button" type="submit">Apply</button>
+        <button class="ghost-button" data-click="reset-about-article-filters" type="button">Reset</button>
+        <button class="danger-button" data-click="cleanup-hidden-about-articles" type="button">Drop hidden older than 30 days</button>
+      </div>
+    </form>
+    ${renderAdminPublicArticleList(filteredAboutArticles(articles))}
+  `;
+}
+
+function filteredAboutArticles(articles) {
+  const status = state.aboutArticleFilters.status;
+  const query = state.aboutArticleFilters.query.trim().toLowerCase();
+
+  return articles.filter((article) => {
+    const matchesStatus = status === "all" || article.status === status;
+    const matchesQuery = !query || `${article.title} ${article.body}`.toLowerCase().includes(query);
+    return matchesStatus && matchesQuery;
+  });
+}
+
 function renderAdminPublicArticleList(articles) {
-  if (!articles.length) return emptyState("No public home articles have been added.");
+  if (!articles.length) return emptyState("No matching public home publications.");
 
   return `
     <div class="item-list">
-      ${articles
-        .map(
-          (article) => `
-            <article class="item-card">
-              ${renderPublicArticleForm(article)}
-            </article>
-          `
-        )
-        .join("")}
+      ${articles.map(renderAdminPublicArticleCard).join("")}
     </div>
+  `;
+}
+
+function renderAdminPublicArticleCard(article) {
+  const isEditing = Number(state.editingAboutArticleId) === Number(article.id);
+
+  if (isEditing) {
+    return `
+      <article class="publication-card editing">
+        ${renderPublicArticleForm(article)}
+      </article>
+    `;
+  }
+
+  const preview = article.body.length > 260 ? `${article.body.slice(0, 260)}...` : article.body;
+  const nextStatus = article.status === "hidden" ? "published" : "hidden";
+
+  return `
+    <article class="publication-card ${article.image?.dataUrl ? "" : "without-image"}">
+      ${
+        article.image?.dataUrl
+          ? `<img src="${escapeHtml(article.image.dataUrl)}" alt="${escapeHtml(article.title)}">`
+          : ""
+      }
+      <div class="publication-body">
+        <div class="panel-header">
+          <div>
+            <h4>${escapeHtml(article.title)}</h4>
+            <p>${escapeHtml(preview)}</p>
+          </div>
+          ${statusPill(article.status)}
+        </div>
+        <div class="item-meta">
+          <span>Order ${article.displayOrder}</span>
+          <span>Created ${formatDate(article.createdAt)}</span>
+          <span>Updated ${formatDate(article.updatedAt)}</span>
+          ${article.hiddenAt ? `<span>Hidden ${formatDate(article.hiddenAt)}</span>` : ""}
+        </div>
+        <div class="actions publication-actions">
+          <button class="secondary-button" data-click="edit-about-article" data-article-id="${article.id}" type="button">Edit</button>
+          <button class="ghost-button" data-click="about-article-status" data-article-id="${article.id}" data-status="${nextStatus}" type="button">
+            ${article.status === "hidden" ? "Publish" : "Hide"}
+          </button>
+          <button class="danger-button" data-click="delete-about-article" data-article-id="${article.id}" type="button">Delete</button>
+        </div>
+      </div>
+    </article>
   `;
 }
 
@@ -1778,6 +1891,7 @@ function renderLeadershipPositionForm(position = null) {
                 <select name="status">
                   <option value="published" ${position.status === "published" ? "selected" : ""}>Published</option>
                   <option value="hidden" ${position.status === "hidden" ? "selected" : ""}>Hidden</option>
+                  <option value="archived" ${position.status === "archived" ? "selected" : ""}>Archived</option>
                 </select>
               </label>`
             : ""
@@ -1788,26 +1902,123 @@ function renderLeadershipPositionForm(position = null) {
         <input name="image" type="file" accept="image/png,image/jpeg,image/webp">
       </label>
       ${position?.image?.dataUrl ? `<img class="leadership-thumb" src="${escapeHtml(position.image.dataUrl)}" alt="${escapeHtml(position.title)}">` : ""}
-      <button class="primary-button" type="submit">${isEdit ? "Save position" : "Add position"}</button>
+      <div class="actions">
+        <button class="primary-button" type="submit">${isEdit ? "Save position" : "Add position"}</button>
+        ${isEdit ? `<button class="ghost-button" data-click="cancel-leadership-position-edit" type="button">Cancel</button>` : ""}
+      </div>
     </form>
   `;
 }
 
+function renderLeadershipPositionManager(positions) {
+  const counts = {
+    all: positions.length,
+    published: positions.filter((position) => position.status === "published").length,
+    hidden: positions.filter((position) => position.status === "hidden").length,
+    archived: positions.filter((position) => position.status === "archived").length
+  };
+
+  return `
+    <div class="metric-grid compact-metrics">
+      <div class="metric"><span>Total</span><strong>${counts.all}</strong></div>
+      <div class="metric"><span>Current</span><strong>${counts.published}</strong></div>
+      <div class="metric"><span>Hidden</span><strong>${counts.hidden}</strong></div>
+      <div class="metric"><span>Archived</span><strong>${counts.archived}</strong></div>
+    </div>
+    <form class="publication-toolbar" data-action="filter-leadership-positions">
+      <label class="field">
+        <span>Status</span>
+        <select name="status">
+          <option value="all" ${state.leadershipFilters.status === "all" ? "selected" : ""}>All positions</option>
+          <option value="published" ${state.leadershipFilters.status === "published" ? "selected" : ""}>Current only</option>
+          <option value="hidden" ${state.leadershipFilters.status === "hidden" ? "selected" : ""}>Hidden only</option>
+          <option value="archived" ${state.leadershipFilters.status === "archived" ? "selected" : ""}>Archived only</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Search title, name, or bio</span>
+        <input name="query" value="${escapeHtml(state.leadershipFilters.query)}" placeholder="Search leaders">
+      </label>
+      <div class="filter-actions">
+        <button class="secondary-button" type="submit">Apply</button>
+        <button class="ghost-button" data-click="reset-leadership-filters" type="button">Reset</button>
+      </div>
+    </form>
+    ${renderAdminLeadershipList(filteredLeadershipPositions(positions))}
+  `;
+}
+
+function filteredLeadershipPositions(positions) {
+  const status = state.leadershipFilters.status;
+  const query = state.leadershipFilters.query.trim().toLowerCase();
+
+  return positions.filter((position) => {
+    const matchesStatus = status === "all" || position.status === status;
+    const matchesQuery = !query || `${position.title} ${position.holderName} ${position.body}`.toLowerCase().includes(query);
+    return matchesStatus && matchesQuery;
+  });
+}
+
 function renderAdminLeadershipList(positions) {
-  if (!positions.length) return emptyState("No leadership positions have been added.");
+  if (!positions.length) return emptyState("No matching leadership positions.");
 
   return `
     <div class="item-list">
-      ${positions
-        .map(
-          (position) => `
-            <article class="item-card">
-              ${renderLeadershipPositionForm(position)}
-            </article>
-          `
-        )
-        .join("")}
+      ${positions.map(renderAdminLeadershipCard).join("")}
     </div>
+  `;
+}
+
+function renderAdminLeadershipCard(position) {
+  const isEditing = Number(state.editingLeadershipPositionId) === Number(position.id);
+
+  if (isEditing) {
+    return `
+      <article class="publication-card editing">
+        ${renderLeadershipPositionForm(position)}
+      </article>
+    `;
+  }
+
+  const preview = position.body.length > 220 ? `${position.body.slice(0, 220)}...` : position.body;
+
+  return `
+    <article class="publication-card ${position.image?.dataUrl ? "" : "without-image"}">
+      ${
+        position.image?.dataUrl
+          ? `<img src="${escapeHtml(position.image.dataUrl)}" alt="${escapeHtml(position.title)}">`
+          : ""
+      }
+      <div class="publication-body">
+        <div class="panel-header">
+          <div>
+            <h4>${escapeHtml(position.title)}</h4>
+            ${position.holderName ? `<strong>${escapeHtml(position.holderName)}</strong>` : ""}
+            ${preview ? `<p>${escapeHtml(preview)}</p>` : ""}
+          </div>
+          ${statusPill(position.status)}
+        </div>
+        <div class="item-meta">
+          <span>Order ${position.displayOrder}</span>
+          <span>Created ${formatDate(position.createdAt)}</span>
+          <span>Updated ${formatDate(position.updatedAt)}</span>
+          ${position.archivedAt ? `<span>Archived ${formatDate(position.archivedAt)}</span>` : ""}
+        </div>
+        <div class="actions publication-actions">
+          <button class="secondary-button" data-click="edit-leadership-position" data-position-id="${position.id}" type="button">Edit</button>
+          ${
+            position.status === "published"
+              ? `<button class="ghost-button" data-click="leadership-position-status" data-position-id="${position.id}" data-status="hidden" type="button">Hide</button>`
+              : `<button class="ghost-button" data-click="leadership-position-status" data-position-id="${position.id}" data-status="published" type="button">Publish</button>`
+          }
+          ${
+            position.status === "archived"
+              ? ""
+              : `<button class="ghost-button" data-click="leadership-position-status" data-position-id="${position.id}" data-status="archived" type="button">Archive</button>`
+          }
+        </div>
+      </div>
+    </article>
   `;
 }
 
@@ -1987,6 +2198,598 @@ function renderAdminEventManager(events) {
                   }
                 </div>
               </form>
+            </article>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function dateOnlyValue(value) {
+  if (!value) return "";
+  return String(value).slice(0, 10);
+}
+
+function currentMonthValue() {
+  return new Date().toISOString().slice(0, 7);
+}
+
+function socialTaskLabel(taskType) {
+  const labels = {
+    food: "Food team",
+    drinks: "Drinks team",
+    host: "Meeting host",
+    setup: "Setup",
+    cleanup: "Cleanup",
+    other: "Other"
+  };
+  return labels[taskType] || "Other";
+}
+
+function socialTaskOptions(selected = "food") {
+  return ["food", "drinks", "host", "setup", "cleanup", "other"]
+    .map((taskType) => `<option value="${taskType}" ${selected === taskType ? "selected" : ""}>${socialTaskLabel(taskType)}</option>`)
+    .join("");
+}
+
+function socialStatusOptions(statuses, selected) {
+  return statuses
+    .map((status) => `<option value="${status}" ${selected === status ? "selected" : ""}>${status}</option>`)
+    .join("");
+}
+
+function activeMemberOptions(selectedId = "") {
+  const members = (state.admin?.members || []).filter((member) => member.membershipStatus === "active");
+  return `
+    <option value="">Unassigned</option>
+    ${members
+      .map((member) => `<option value="${member.id}" ${Number(selectedId) === Number(member.id) ? "selected" : ""}>${escapeHtml(member.fullName)} (${escapeHtml(member.email)})</option>`)
+      .join("")}
+  `;
+}
+
+function renderAdminSocialCoordinator() {
+  const loading = requireAdminData("Loading social coordinator...");
+  if (loading) return loading;
+
+  const social = state.admin.social || { meetings: [], resources: [], resourceRequests: [] };
+  const pendingRequests = social.resourceRequests.filter((request) => request.status === "pending");
+  const currentMeetings = social.meetings.filter((meeting) => meeting.status !== "completed" && meeting.status !== "cancelled");
+
+  return `
+    <section class="content-grid">
+      <div class="metric-grid">
+        <div class="metric"><span>Meetings tracked</span><strong>${social.meetings.length}</strong></div>
+        <div class="metric"><span>Open meetings</span><strong>${currentMeetings.length}</strong></div>
+        <div class="metric"><span>Resources</span><strong>${social.resources.length}</strong></div>
+        <div class="metric"><span>Pending requests</span><strong>${pendingRequests.length}</strong></div>
+      </div>
+      <section class="two-column">
+        <div class="content-grid">
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <h3>Monthly meetings</h3>
+                <p>Meetings are planned for the first Saturday of each month.</p>
+              </div>
+            </div>
+            ${renderAdminSocialMeetingList(social.meetings)}
+          </div>
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <h3>Resource requests</h3>
+                <p>Review member requests for chairs and other organization resources.</p>
+              </div>
+            </div>
+            ${renderAdminSocialResourceRequests(social.resourceRequests)}
+          </div>
+        </div>
+        <aside class="content-grid">
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <h3>Create monthly meeting</h3>
+                <p>Choose a month and the system uses that month&apos;s first Saturday.</p>
+              </div>
+            </div>
+            ${renderSocialMeetingForm()}
+          </div>
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <h3>Resources</h3>
+                <p>Track chairs and other shared organization resources.</p>
+              </div>
+            </div>
+            ${renderSocialResourceManager(social.resources)}
+          </div>
+        </aside>
+      </section>
+    </section>
+  `;
+}
+
+function renderSocialMeetingForm() {
+  return `
+    <form class="form-stack" data-action="create-social-meeting">
+      <label class="field">
+        <span>Meeting month</span>
+        <input name="meetingMonth" type="month" value="${currentMonthValue()}" required>
+      </label>
+      <label class="field">
+        <span>Title</span>
+        <input name="title" value="237 Ville monthly meeting" required>
+      </label>
+      <label class="field">
+        <span>Location</span>
+        <input name="location">
+      </label>
+      <label class="field">
+        <span>Notes</span>
+        <textarea name="notes"></textarea>
+      </label>
+      <button class="primary-button" type="submit">Create meeting</button>
+    </form>
+  `;
+}
+
+function renderAdminSocialMeetingList(meetings) {
+  if (!meetings.length) return emptyState("No social meetings have been created.");
+
+  return `
+    <div class="item-list">
+      ${meetings.map(renderAdminSocialMeetingCard).join("")}
+    </div>
+  `;
+}
+
+function renderAdminSocialMeetingCard(meeting) {
+  return `
+    <article class="item-card social-meeting-card">
+      <div class="panel-header">
+        <div>
+          <h4>${escapeHtml(meeting.title)}</h4>
+          <p>${formatDate(meeting.meetingDate, { dateOnly: true })}${meeting.location ? ` · ${escapeHtml(meeting.location)}` : ""}</p>
+        </div>
+        ${statusPill(meeting.status)}
+      </div>
+      <form class="form-stack" data-action="update-social-meeting" data-meeting-id="${meeting.id}">
+        <div class="form-grid">
+          <label class="field">
+            <span>Title</span>
+            <input name="title" value="${escapeHtml(meeting.title)}" required>
+          </label>
+          <label class="field">
+            <span>Meeting date</span>
+            <input name="meetingDate" type="date" value="${dateOnlyValue(meeting.meetingDate)}" required>
+          </label>
+          <label class="field">
+            <span>Location</span>
+            <input name="location" value="${escapeHtml(meeting.location || "")}">
+          </label>
+          <label class="field">
+            <span>Status</span>
+            <select name="status">${socialStatusOptions(["draft", "published", "completed", "cancelled"], meeting.status)}</select>
+          </label>
+        </div>
+        <label class="field">
+          <span>Notes</span>
+          <textarea name="notes">${escapeHtml(meeting.notes || "")}</textarea>
+        </label>
+        <div class="actions">
+          <button class="primary-button" type="submit">Save meeting</button>
+          <button class="secondary-button" data-click="publish-social-meeting" data-meeting-id="${meeting.id}" type="button">Publish as announcement</button>
+        </div>
+      </form>
+      <div class="social-subsection">
+        <h4>Assignments</h4>
+        ${renderSocialAssignmentList(meeting.assignments || [])}
+        ${renderSocialAssignmentForm(meeting.id)}
+      </div>
+    </article>
+  `;
+}
+
+function renderSocialAssignmentList(assignments) {
+  if (!assignments.length) return emptyState("No assignments yet.");
+
+  return `
+    <div class="item-list compact-list">
+      ${assignments
+        .map(
+          (assignment) => `
+            <form class="item-card compact-card" data-action="update-social-assignment" data-assignment-id="${assignment.id}">
+              <div class="form-grid">
+                <label class="field">
+                  <span>Member</span>
+                  <select name="userId">${activeMemberOptions(assignment.userId || "")}</select>
+                </label>
+                <label class="field">
+                  <span>Task</span>
+                  <select name="taskType">${socialTaskOptions(assignment.taskType)}</select>
+                </label>
+                <label class="field">
+                  <span>Group</span>
+                  <input name="groupName" value="${escapeHtml(assignment.groupName || "")}">
+                </label>
+                <label class="field">
+                  <span>Status</span>
+                  <select name="status">${socialStatusOptions(["assigned", "completed", "cancelled"], assignment.status)}</select>
+                </label>
+              </div>
+              <label class="field">
+                <span>Assignment title</span>
+                <input name="title" value="${escapeHtml(assignment.title)}" required>
+              </label>
+              <label class="field">
+                <span>Note</span>
+                <input name="note" value="${escapeHtml(assignment.note || "")}">
+              </label>
+              <button class="secondary-button" type="submit">Save assignment</button>
+            </form>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderSocialAssignmentForm(meetingId) {
+  return `
+    <form class="form-stack social-assignment-form" data-action="create-social-assignment" data-meeting-id="${meetingId}">
+      <div class="form-grid">
+        <label class="field">
+          <span>Member</span>
+          <select name="userId">${activeMemberOptions()}</select>
+        </label>
+        <label class="field">
+          <span>Task</span>
+          <select name="taskType">
+            <option value="food">Food team (women)</option>
+            <option value="drinks">Drinks team (men)</option>
+            <option value="host">Meeting host</option>
+            <option value="setup">Setup</option>
+            <option value="cleanup">Cleanup</option>
+            <option value="other">Other</option>
+          </select>
+        </label>
+      </div>
+      <label class="field">
+        <span>Assignment title</span>
+        <input name="title" placeholder="Bring food, provide drinks, host meeting..." required>
+      </label>
+      <label class="field">
+        <span>Note</span>
+        <input name="note">
+      </label>
+      <button class="secondary-button" type="submit">Assign task</button>
+    </form>
+  `;
+}
+
+function renderSocialResourceManager(resources) {
+  return `
+    <div class="content-grid">
+      <form class="form-stack" data-action="create-social-resource">
+        <label class="field">
+          <span>Resource name</span>
+          <input name="name" placeholder="Chairs, tables, coolers..." required>
+        </label>
+        <div class="form-grid">
+          <label class="field">
+            <span>Total quantity</span>
+            <input name="totalQuantity" type="number" min="0" step="1" value="0">
+          </label>
+          <label class="field">
+            <span>Available quantity</span>
+            <input name="availableQuantity" type="number" min="0" step="1" value="0">
+          </label>
+        </div>
+        <label class="field">
+          <span>Storage location</span>
+          <input name="storageLocation">
+        </label>
+        <label class="field">
+          <span>Description</span>
+          <textarea name="description"></textarea>
+        </label>
+        <button class="primary-button" type="submit">Add resource</button>
+      </form>
+      ${renderSocialResourceList(resources)}
+    </div>
+  `;
+}
+
+function renderSocialResourceList(resources) {
+  if (!resources.length) return emptyState("No resources have been added.");
+
+  return `
+    <div class="item-list">
+      ${resources
+        .map(
+          (resource) => `
+            <form class="item-card compact-card" data-action="update-social-resource" data-resource-id="${resource.id}">
+              <div class="panel-header">
+                <div>
+                  <h4>${escapeHtml(resource.name)}</h4>
+                  <p>${escapeHtml(resource.description || "")}</p>
+                </div>
+                ${statusPill(resource.status)}
+              </div>
+              <div class="form-grid">
+                <label class="field">
+                  <span>Name</span>
+                  <input name="name" value="${escapeHtml(resource.name)}" required>
+                </label>
+                <label class="field">
+                  <span>Status</span>
+                  <select name="status">${socialStatusOptions(["active", "retired"], resource.status)}</select>
+                </label>
+                <label class="field">
+                  <span>Total</span>
+                  <input name="totalQuantity" type="number" min="0" step="1" value="${resource.totalQuantity}">
+                </label>
+                <label class="field">
+                  <span>Available</span>
+                  <input name="availableQuantity" type="number" min="0" step="1" value="${resource.availableQuantity}">
+                </label>
+              </div>
+              <label class="field">
+                <span>Storage location</span>
+                <input name="storageLocation" value="${escapeHtml(resource.storageLocation || "")}">
+              </label>
+              <label class="field">
+                <span>Description</span>
+                <textarea name="description">${escapeHtml(resource.description || "")}</textarea>
+              </label>
+              <button class="secondary-button" type="submit">Save resource</button>
+            </form>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderAdminSocialResourceRequests(requests) {
+  if (!requests.length) return emptyState("No resource requests yet.");
+
+  return `
+    <div class="item-list">
+      ${requests
+        .map(
+          (request) => `
+            <article class="item-card">
+              <div class="panel-header">
+                <div>
+                  <h4>${escapeHtml(request.resourceName)}</h4>
+                  <p>${escapeHtml(request.requesterName)} requested ${request.quantity}${request.meetingTitle ? ` for ${escapeHtml(request.meetingTitle)}` : ""}</p>
+                </div>
+                ${statusPill(request.status)}
+              </div>
+              <div class="item-meta">
+                ${request.neededDate ? `<span>Needed ${formatDate(request.neededDate, { dateOnly: true })}</span>` : ""}
+                ${request.returnDate ? `<span>Return ${formatDate(request.returnDate, { dateOnly: true })}</span>` : ""}
+                <span>${formatDate(request.createdAt)}</span>
+              </div>
+              ${request.note ? `<p>${escapeHtml(request.note)}</p>` : ""}
+              <form class="form-stack compact-form" data-action="update-social-resource-request" data-request-id="${request.id}">
+                <label class="field">
+                  <span>Status</span>
+                  <select name="status">${socialStatusOptions(["pending", "approved", "declined", "returned"], request.status)}</select>
+                </label>
+                <label class="field">
+                  <span>Admin note</span>
+                  <input name="adminNote" value="${escapeHtml(request.adminNote || "")}">
+                </label>
+                <button class="secondary-button" type="submit">Update request</button>
+              </form>
+            </article>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderSocialCoordinator() {
+  const social = state.data.social || { meetings: [], resources: [], resourceRequests: [] };
+  const meetings = social.meetings || [];
+  const resources = social.resources || [];
+  const myAssignments = meetings.flatMap((meeting) =>
+    (meeting.assignments || [])
+      .filter((assignment) => Number(assignment.userId) === Number(state.user.id))
+      .map((assignment) => ({ ...assignment, meeting }))
+  );
+
+  return `
+    <section class="content-grid">
+      <section class="two-column">
+        <div class="content-grid">
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <h3>Monthly social meetings</h3>
+                <p>Food, drinks, hosting, and setup assignments for first-Saturday meetings.</p>
+              </div>
+            </div>
+            ${renderMemberSocialMeetings(meetings)}
+          </div>
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <h3>My assignments</h3>
+                <p>Tasks assigned to you by the social coordinator.</p>
+              </div>
+            </div>
+            ${renderMemberSocialAssignments(myAssignments)}
+          </div>
+        </div>
+        <aside class="content-grid">
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <h3>Request resources</h3>
+                <p>Ask to use organization resources when it is your turn to host.</p>
+              </div>
+            </div>
+            ${renderResourceRequestForm(meetings, resources)}
+          </div>
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <h3>My resource requests</h3>
+                <p>Review request status and admin notes.</p>
+              </div>
+            </div>
+            ${renderMemberResourceRequests(social.resourceRequests || [])}
+          </div>
+        </aside>
+      </section>
+    </section>
+  `;
+}
+
+function renderMemberSocialMeetings(meetings) {
+  if (!meetings.length) return emptyState("No social meeting schedule has been published.");
+
+  return `
+    <div class="item-list">
+      ${meetings
+        .map(
+          (meeting) => `
+            <article class="item-card">
+              <div class="panel-header">
+                <div>
+                  <h4>${escapeHtml(meeting.title)}</h4>
+                  <p>${formatDate(meeting.meetingDate, { dateOnly: true })}${meeting.location ? ` · ${escapeHtml(meeting.location)}` : ""}</p>
+                </div>
+                ${statusPill(meeting.status)}
+              </div>
+              ${meeting.notes ? `<p>${escapeHtml(meeting.notes)}</p>` : ""}
+              ${renderSocialAssignmentSummary(meeting.assignments || [])}
+            </article>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderSocialAssignmentSummary(assignments) {
+  if (!assignments.length) return emptyState("Assignments have not been published yet.");
+
+  return `
+    <div class="item-list compact-list">
+      ${assignments
+        .map(
+          (assignment) => `
+            <div class="comment">
+              <strong>${escapeHtml(socialTaskLabel(assignment.taskType))}</strong>
+              <p>${escapeHtml(assignment.memberName || "Unassigned")}${assignment.groupName ? ` · ${escapeHtml(assignment.groupName)}` : ""}${assignment.note ? ` · ${escapeHtml(assignment.note)}` : ""}</p>
+            </div>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderMemberSocialAssignments(assignments) {
+  if (!assignments.length) return emptyState("No social meeting tasks are assigned to you right now.");
+
+  return `
+    <div class="item-list">
+      ${assignments
+        .map(
+          (assignment) => `
+            <article class="item-card">
+              <h4>${escapeHtml(assignment.title)}</h4>
+              <p>${escapeHtml(assignment.meeting.title)} · ${formatDate(assignment.meeting.meetingDate, { dateOnly: true })}</p>
+              <div class="item-meta">
+                <span>${escapeHtml(socialTaskLabel(assignment.taskType))}</span>
+                <span>${escapeHtml(assignment.groupName || "general")}</span>
+                <span>${escapeHtml(assignment.status)}</span>
+              </div>
+              ${assignment.note ? `<p>${escapeHtml(assignment.note)}</p>` : ""}
+            </article>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderResourceRequestForm(meetings, resources) {
+  const activeResources = resources.filter((resource) => resource.status === "active");
+  if (!activeResources.length) return emptyState("No active organization resources are available to request.");
+
+  return `
+    <form class="form-stack" data-action="create-social-resource-request">
+      <label class="field">
+        <span>Meeting</span>
+        <select name="meetingId">
+          <option value="">No meeting selected</option>
+          ${meetings
+            .map((meeting) => `<option value="${meeting.id}">${escapeHtml(meeting.title)} - ${formatDate(meeting.meetingDate, { dateOnly: true })}</option>`)
+            .join("")}
+        </select>
+      </label>
+      <label class="field">
+        <span>Resource</span>
+        <select name="resourceId" required>
+          ${activeResources
+            .map((resource) => `<option value="${resource.id}">${escapeHtml(resource.name)} (${resource.availableQuantity} available)</option>`)
+            .join("")}
+        </select>
+      </label>
+      <label class="field">
+        <span>Quantity</span>
+        <input name="quantity" type="number" min="1" step="1" value="1" required>
+      </label>
+      <div class="form-grid">
+        <label class="field">
+          <span>Needed date</span>
+          <input name="neededDate" type="date">
+        </label>
+        <label class="field">
+          <span>Return date</span>
+          <input name="returnDate" type="date">
+        </label>
+      </div>
+      <label class="field">
+        <span>Note</span>
+        <textarea name="note"></textarea>
+      </label>
+      <button class="primary-button" type="submit">Submit request</button>
+    </form>
+  `;
+}
+
+function renderMemberResourceRequests(requests) {
+  if (!requests.length) return emptyState("You have not requested resources yet.");
+
+  return `
+    <div class="item-list">
+      ${requests
+        .map(
+          (request) => `
+            <article class="item-card">
+              <div class="panel-header">
+                <div>
+                  <h4>${escapeHtml(request.resourceName)}</h4>
+                  <p>Quantity ${request.quantity}${request.meetingTitle ? ` · ${escapeHtml(request.meetingTitle)}` : ""}</p>
+                </div>
+                ${statusPill(request.status)}
+              </div>
+              <div class="item-meta">
+                ${request.neededDate ? `<span>Needed ${formatDate(request.neededDate, { dateOnly: true })}</span>` : ""}
+                ${request.returnDate ? `<span>Return ${formatDate(request.returnDate, { dateOnly: true })}</span>` : ""}
+              </div>
+              ${request.note ? `<p>${escapeHtml(request.note)}</p>` : ""}
+              ${request.adminNote ? `<p class="muted">${escapeHtml(request.adminNote)}</p>` : ""}
             </article>
           `
         )
@@ -2967,6 +3770,7 @@ async function handleSubmit(event) {
         body: JSON.stringify({ ...payload, image })
       });
       form.reset();
+      state.editingLeadershipPositionId = null;
       state.message = "Leadership position added.";
       state.messageType = "ok";
       await refreshAll({ includeAdmin: true });
@@ -2979,6 +3783,7 @@ async function handleSubmit(event) {
         method: "PATCH",
         body: JSON.stringify({ ...payload, image })
       });
+      state.editingLeadershipPositionId = null;
       state.message = "Leadership position saved.";
       state.messageType = "ok";
       await refreshAll({ includeAdmin: true });
@@ -2992,6 +3797,7 @@ async function handleSubmit(event) {
         body: JSON.stringify({ ...payload, image })
       });
       form.reset();
+      state.editingAboutArticleId = null;
       state.message = "Public home article published.";
       state.messageType = "ok";
       await refreshAll({ includeAdmin: true });
@@ -3004,6 +3810,7 @@ async function handleSubmit(event) {
         method: "PATCH",
         body: JSON.stringify({ ...payload, image })
       });
+      state.editingAboutArticleId = null;
       state.message = "Public home article saved.";
       state.messageType = "ok";
       await refreshAll({ includeAdmin: true });
@@ -3040,6 +3847,98 @@ async function handleSubmit(event) {
         body: JSON.stringify(payload)
       });
       state.message = "Event updated.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
+    if (action === "create-social-meeting") {
+      await api("/api/admin/social/meetings", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      form.reset();
+      state.message = "Social meeting created.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
+    if (action === "update-social-meeting") {
+      await api(`/api/admin/social/meetings/${form.dataset.meetingId}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload)
+      });
+      state.message = "Social meeting saved.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
+    if (action === "create-social-assignment") {
+      await api(`/api/admin/social/meetings/${form.dataset.meetingId}/assignments`, {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      form.reset();
+      state.message = "Social assignment added.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
+    if (action === "update-social-assignment") {
+      await api(`/api/admin/social/assignments/${form.dataset.assignmentId}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload)
+      });
+      state.message = "Social assignment saved.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
+    if (action === "create-social-resource") {
+      await api("/api/admin/social/resources", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      form.reset();
+      state.message = "Resource added.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
+    if (action === "update-social-resource") {
+      await api(`/api/admin/social/resources/${form.dataset.resourceId}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload)
+      });
+      state.message = "Resource saved.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
+    if (action === "create-social-resource-request") {
+      await api("/api/social/resource-requests", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      form.reset();
+      state.message = "Resource request submitted.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: state.user.role === "admin" });
+      return;
+    }
+
+    if (action === "update-social-resource-request") {
+      await api(`/api/admin/social/resource-requests/${form.dataset.requestId}/status`, {
+        method: "PATCH",
+        body: JSON.stringify(payload)
+      });
+      state.message = "Resource request updated.";
       state.messageType = "ok";
       await refreshAll({ includeAdmin: true });
       return;
@@ -3151,6 +4050,24 @@ async function handleSubmit(event) {
       return;
     }
 
+    if (action === "filter-about-articles") {
+      state.aboutArticleFilters = {
+        status: ["published", "hidden"].includes(payload.status) ? payload.status : "all",
+        query: payload.query || ""
+      };
+      render();
+      return;
+    }
+
+    if (action === "filter-leadership-positions") {
+      state.leadershipFilters = {
+        status: ["published", "hidden", "archived"].includes(payload.status) ? payload.status : "all",
+        query: payload.query || ""
+      };
+      render();
+      return;
+    }
+
     if (action === "filter-archived-votes") {
       state.voteArchiveQuery = payload.query || "";
       render();
@@ -3224,6 +4141,42 @@ async function handleClick(event) {
       return;
     }
 
+    if (action === "reset-about-article-filters") {
+      state.aboutArticleFilters = { status: "all", query: "" };
+      render();
+      return;
+    }
+
+    if (action === "reset-leadership-filters") {
+      state.leadershipFilters = { status: "all", query: "" };
+      render();
+      return;
+    }
+
+    if (action === "edit-about-article") {
+      state.editingAboutArticleId = Number(button.dataset.articleId);
+      render();
+      return;
+    }
+
+    if (action === "edit-leadership-position") {
+      state.editingLeadershipPositionId = Number(button.dataset.positionId);
+      render();
+      return;
+    }
+
+    if (action === "cancel-about-article-edit") {
+      state.editingAboutArticleId = null;
+      render();
+      return;
+    }
+
+    if (action === "cancel-leadership-position-edit") {
+      state.editingLeadershipPositionId = null;
+      render();
+      return;
+    }
+
     if (action === "reset-archived-votes") {
       state.voteArchiveQuery = "";
       render();
@@ -3265,6 +4218,61 @@ async function handleClick(event) {
         input.focus();
         input.select();
       }
+      return;
+    }
+
+    if (action === "cleanup-hidden-about-articles") {
+      const result = await api("/api/admin/about/articles/cleanup-hidden", {
+        method: "POST",
+        body: "{}"
+      });
+      state.editingAboutArticleId = null;
+      state.message = `${result.deletedCount} hidden publication${result.deletedCount === 1 ? "" : "s"} older than 30 days dropped.`;
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
+    if (action === "about-article-status") {
+      await api(`/api/admin/about/articles/${button.dataset.articleId}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: button.dataset.status })
+      });
+      state.editingAboutArticleId = null;
+      state.message = button.dataset.status === "hidden" ? "Publication hidden." : "Publication published.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
+    if (action === "leadership-position-status") {
+      await api(`/api/admin/about/positions/${button.dataset.positionId}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: button.dataset.status })
+      });
+      state.editingLeadershipPositionId = null;
+      state.message =
+        button.dataset.status === "archived"
+          ? "Leadership position archived."
+          : button.dataset.status === "hidden"
+            ? "Leadership position hidden."
+            : "Leadership position published.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
+    if (action === "delete-about-article") {
+      if (!window.confirm("Delete this publication permanently?")) {
+        return;
+      }
+      await api(`/api/admin/about/articles/${button.dataset.articleId}`, {
+        method: "DELETE"
+      });
+      state.editingAboutArticleId = null;
+      state.message = "Publication deleted.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
       return;
     }
 
@@ -3338,6 +4346,17 @@ async function handleClick(event) {
         body: "{}"
       });
       state.message = "Event archived.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
+    if (action === "publish-social-meeting") {
+      await api(`/api/admin/social/meetings/${button.dataset.meetingId}/publish`, {
+        method: "POST",
+        body: "{}"
+      });
+      state.message = "Social meeting assignments published as an announcement.";
       state.messageType = "ok";
       await refreshAll({ includeAdmin: true });
       return;

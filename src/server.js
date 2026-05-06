@@ -436,9 +436,15 @@ function toLeadershipPosition(row) {
     },
     displayOrder: Number(row.display_order || 0),
     status: row.status,
+    archivedAt: row.archived_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
+}
+
+function normalizeLeadershipStatus(status) {
+  if (status === "hidden" || status === "archived") return status;
+  return "published";
 }
 
 function toPublicAboutArticle(row) {
@@ -454,12 +460,27 @@ function toPublicAboutArticle(row) {
     },
     displayOrder: Number(row.display_order || 0),
     status: row.status,
+    hiddenAt: row.hidden_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
 }
 
+async function cleanupExpiredHiddenAboutArticles() {
+  const { rowCount } = await query(
+    `
+      DELETE FROM public_about_articles
+      WHERE status = 'hidden'
+        AND COALESCE(hidden_at, updated_at, created_at) < now() - interval '30 days'
+    `
+  );
+
+  return rowCount;
+}
+
 async function getAboutContent({ includeHidden = false } = {}) {
+  await cleanupExpiredHiddenAboutArticles();
+
   const about = await query(
     `
       SELECT *
@@ -1060,6 +1081,245 @@ async function listMembers() {
   }));
 }
 
+function firstSaturdayFromMonth(monthValue) {
+  const match = String(monthValue || "").trim().match(/^(\d{4})-(\d{2})$/);
+  if (!match) {
+    throw Object.assign(new Error("Choose a valid meeting month."), { statusCode: 400 });
+  }
+
+  const year = Number(match[1]);
+  const monthIndex = Number(match[2]) - 1;
+  const firstDay = new Date(Date.UTC(year, monthIndex, 1));
+  const daysUntilSaturday = (6 - firstDay.getUTCDay() + 7) % 7;
+  firstDay.setUTCDate(firstDay.getUTCDate() + daysUntilSaturday);
+  return firstDay.toISOString().slice(0, 10);
+}
+
+function normalizeSocialMeetingDate(payload = {}) {
+  if (payload.meetingDate) {
+    const date = new Date(`${payload.meetingDate}T00:00:00Z`);
+    if (Number.isNaN(date.getTime())) {
+      throw Object.assign(new Error("Choose a valid meeting date."), { statusCode: 400 });
+    }
+    return date.toISOString().slice(0, 10);
+  }
+  return firstSaturdayFromMonth(payload.meetingMonth);
+}
+
+function normalizeSocialTaskType(value) {
+  return ["food", "drinks", "host", "setup", "cleanup", "other"].includes(value) ? value : "other";
+}
+
+function defaultSocialGroup(taskType) {
+  if (taskType === "food") return "women";
+  if (taskType === "drinks") return "men";
+  return "general";
+}
+
+function normalizeSocialMeetingStatus(value) {
+  return ["draft", "published", "completed", "cancelled"].includes(value) ? value : "draft";
+}
+
+function normalizeResourceStatus(value) {
+  return value === "retired" ? "retired" : "active";
+}
+
+function normalizeResourceRequestStatus(value) {
+  return ["approved", "declined", "returned"].includes(value) ? value : "pending";
+}
+
+function toSocialResource(row) {
+  return {
+    id: Number(row.id),
+    name: row.name,
+    description: row.description || "",
+    totalQuantity: Number(row.total_quantity || 0),
+    availableQuantity: Number(row.available_quantity || 0),
+    storageLocation: row.storage_location || "",
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function toSocialAssignment(row) {
+  return {
+    id: Number(row.id),
+    meetingId: Number(row.meeting_id),
+    userId: row.user_id ? Number(row.user_id) : null,
+    memberName: row.member_name || "Unassigned",
+    memberEmail: row.member_email || "",
+    taskType: row.task_type,
+    groupName: row.group_name || defaultSocialGroup(row.task_type),
+    title: row.title,
+    note: row.note || "",
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function toSocialResourceRequest(row) {
+  return {
+    id: Number(row.id),
+    meetingId: row.meeting_id ? Number(row.meeting_id) : null,
+    meetingTitle: row.meeting_title || "",
+    meetingDate: row.meeting_date || null,
+    resourceId: Number(row.resource_id),
+    resourceName: row.resource_name || "",
+    requestedBy: Number(row.requested_by),
+    requesterName: row.requester_name || "",
+    requesterEmail: row.requester_email || "",
+    quantity: Number(row.quantity || 0),
+    neededDate: row.needed_date,
+    returnDate: row.return_date,
+    status: row.status,
+    note: row.note || "",
+    adminNote: row.admin_note || "",
+    reviewedBy: row.reviewed_by ? Number(row.reviewed_by) : null,
+    reviewedAt: row.reviewed_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function toSocialMeeting(row, assignments = [], resourceRequests = []) {
+  return {
+    id: Number(row.id),
+    title: row.title,
+    meetingDate: row.meeting_date,
+    location: row.location || "",
+    notes: row.notes || "",
+    status: row.status,
+    announcementId: row.announcement_id ? Number(row.announcement_id) : null,
+    publishedAt: row.published_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    assignments: assignments.filter((assignment) => Number(assignment.meetingId) === Number(row.id)),
+    resourceRequests: resourceRequests.filter((request) => Number(request.meetingId) === Number(row.id))
+  };
+}
+
+async function listSocialCoordinator(user, { includeAll = false } = {}) {
+  const meetingsResult = await query(
+    `
+      SELECT *
+      FROM social_meetings
+      WHERE ($1::boolean = true OR status IN ('published', 'completed'))
+      ORDER BY meeting_date DESC
+      LIMIT 36
+    `,
+    [Boolean(includeAll)]
+  );
+  const resourcesResult = await query(
+    `
+      SELECT *
+      FROM social_resources
+      WHERE ($1::boolean = true OR status = 'active')
+      ORDER BY status ASC, name ASC
+      LIMIT 100
+    `,
+    [Boolean(includeAll)]
+  );
+  const assignmentsResult = await query(
+    `
+      SELECT social_assignments.*, users.full_name AS member_name, users.email AS member_email
+      FROM social_assignments
+      LEFT JOIN users ON users.id = social_assignments.user_id
+      JOIN social_meetings ON social_meetings.id = social_assignments.meeting_id
+      WHERE ($1::boolean = true OR social_meetings.status IN ('published', 'completed') OR social_assignments.user_id = $2)
+      ORDER BY social_meetings.meeting_date DESC, social_assignments.task_type ASC, social_assignments.created_at ASC
+      LIMIT 500
+    `,
+    [Boolean(includeAll), user.id]
+  );
+  const requestsResult = includeAll
+    ? await query(
+        `
+          SELECT social_resource_requests.*,
+                 social_resources.name AS resource_name,
+                 social_meetings.title AS meeting_title,
+                 social_meetings.meeting_date,
+                 users.full_name AS requester_name,
+                 users.email AS requester_email
+          FROM social_resource_requests
+          JOIN social_resources ON social_resources.id = social_resource_requests.resource_id
+          JOIN users ON users.id = social_resource_requests.requested_by
+          LEFT JOIN social_meetings ON social_meetings.id = social_resource_requests.meeting_id
+          ORDER BY social_resource_requests.created_at DESC
+          LIMIT 300
+        `
+      )
+    : await query(
+        `
+          SELECT social_resource_requests.*,
+                 social_resources.name AS resource_name,
+                 social_meetings.title AS meeting_title,
+                 social_meetings.meeting_date,
+                 users.full_name AS requester_name,
+                 users.email AS requester_email
+          FROM social_resource_requests
+          JOIN social_resources ON social_resources.id = social_resource_requests.resource_id
+          JOIN users ON users.id = social_resource_requests.requested_by
+          LEFT JOIN social_meetings ON social_meetings.id = social_resource_requests.meeting_id
+          WHERE social_resource_requests.requested_by = $1
+          ORDER BY social_resource_requests.created_at DESC
+          LIMIT 100
+        `,
+        [user.id]
+      );
+
+  const assignments = assignmentsResult.rows.map(toSocialAssignment);
+  const requests = requestsResult.rows.map(toSocialResourceRequest);
+
+  return {
+    meetings: meetingsResult.rows.map((row) => toSocialMeeting(row, assignments, requests)),
+    resources: resourcesResult.rows.map(toSocialResource),
+    resourceRequests: requests
+  };
+}
+
+function socialTaskLabel(taskType) {
+  const labels = {
+    food: "Food team",
+    drinks: "Drinks team",
+    host: "Meeting host",
+    setup: "Setup",
+    cleanup: "Cleanup",
+    other: "Other"
+  };
+  return labels[taskType] || "Other";
+}
+
+function buildSocialAnnouncementBody(meeting, assignments, requests) {
+  const assignmentLines = assignments.length
+    ? assignments.map((assignment) => {
+        const group = assignment.group_name ? ` (${assignment.group_name})` : "";
+        const name = assignment.member_name || "Unassigned";
+        const note = assignment.note ? ` - ${assignment.note}` : "";
+        return `- ${socialTaskLabel(assignment.task_type)}${group}: ${name}${note}`;
+      })
+    : ["- No assignments have been added yet."];
+
+  const requestLines = requests.filter((request) => request.status === "approved").length
+    ? requests
+        .filter((request) => request.status === "approved")
+        .map((request) => `- ${request.resource_name}: ${request.quantity} approved for ${request.requester_name}`)
+    : ["- No approved resource requests yet."];
+
+  return [
+    `${meeting.title} is scheduled for ${meeting.meeting_date}.`,
+    meeting.location ? `Location: ${meeting.location}` : "",
+    meeting.notes ? `Notes: ${meeting.notes}` : "",
+    "",
+    "Assignments:",
+    ...assignmentLines,
+    "",
+    "Approved resource requests:",
+    ...requestLines
+  ].filter((line) => line !== "").join("\n");
+}
+
 async function handleApi(req, res, url) {
   const method = req.method || "GET";
   const pathname = url.pathname;
@@ -1335,16 +1595,18 @@ async function handleApi(req, res, url) {
         events: [],
         questions: [],
         ballots: [],
+        social: { meetings: [], resources: [], resourceRequests: [] },
         financials: { donations: [], expenditures: [], summary: { donationTotalCents: 0, expenditureTotalCents: 0, publishedNetCents: 0 } }
       });
     }
 
-    const [announcements, events, questions, ballots, financials] = await Promise.all([
+    const [announcements, events, questions, ballots, financials, social] = await Promise.all([
       listAnnouncements(10),
       listEvents(10),
       listQuestions(),
       listBallots(user, { includeDrafts: user.role === "admin" }),
-      listPublishedFinancials()
+      listPublishedFinancials(),
+      listSocialCoordinator(user, { includeAll: user.role === "admin" })
     ]);
 
     return sendJson(res, 200, {
@@ -1354,6 +1616,7 @@ async function handleApi(req, res, url) {
       events,
       questions,
       ballots,
+      social,
       financials,
       paymentDetails,
       payments,
@@ -1610,6 +1873,413 @@ async function handleApi(req, res, url) {
     }
 
     return sendJson(res, 200, { event: rows[0] });
+  }
+
+  if (method === "POST" && pathname === "/api/admin/social/meetings") {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    const payload = await readJson(req);
+    const meetingDate = normalizeSocialMeetingDate(payload);
+    const title = String(payload.title || `237 Ville monthly meeting`).trim();
+
+    const { rows } = await query(
+      `
+        INSERT INTO social_meetings (title, meeting_date, location, notes, status, created_by)
+        VALUES ($1, $2::date, $3, $4, $5, $6)
+        ON CONFLICT (meeting_date)
+        DO UPDATE SET
+          title = EXCLUDED.title,
+          location = EXCLUDED.location,
+          notes = EXCLUDED.notes,
+          updated_at = now()
+        RETURNING *
+      `,
+      [
+        title,
+        meetingDate,
+        String(payload.location || "").trim(),
+        String(payload.notes || "").trim(),
+        normalizeSocialMeetingStatus(payload.status),
+        admin.id
+      ]
+    );
+
+    return sendJson(res, 201, { meeting: toSocialMeeting(rows[0]) });
+  }
+
+  const socialMeetingMatch = pathname.match(/^\/api\/admin\/social\/meetings\/(\d+)$/);
+  if (method === "PATCH" && socialMeetingMatch) {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    const meetingId = parseId(socialMeetingMatch[1]);
+    const payload = await readJson(req);
+    requireFields(payload, ["title", "meetingDate"]);
+    const status = normalizeSocialMeetingStatus(payload.status);
+
+    const { rows } = await query(
+      `
+        UPDATE social_meetings
+        SET title = $2,
+            meeting_date = $3::date,
+            location = $4,
+            notes = $5,
+            status = $6,
+            updated_at = now()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [
+        meetingId,
+        String(payload.title).trim(),
+        normalizeSocialMeetingDate(payload),
+        String(payload.location || "").trim(),
+        String(payload.notes || "").trim(),
+        status
+      ]
+    );
+
+    if (rows.length === 0) {
+      return sendError(res, 404, "Social meeting not found.");
+    }
+
+    return sendJson(res, 200, { meeting: toSocialMeeting(rows[0]) });
+  }
+
+  const socialAssignmentCreateMatch = pathname.match(/^\/api\/admin\/social\/meetings\/(\d+)\/assignments$/);
+  if (method === "POST" && socialAssignmentCreateMatch) {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    const meetingId = parseId(socialAssignmentCreateMatch[1]);
+    const payload = await readJson(req);
+    requireFields(payload, ["title"]);
+    const taskType = normalizeSocialTaskType(payload.taskType);
+    const memberId = payload.userId ? parseId(payload.userId) : null;
+
+    const meetingResult = await query("SELECT * FROM social_meetings WHERE id = $1", [meetingId]);
+    if (meetingResult.rows.length === 0) {
+      return sendError(res, 404, "Social meeting not found.");
+    }
+
+    const { rows } = await query(
+      `
+        INSERT INTO social_assignments (meeting_id, user_id, task_type, group_name, title, note, status)
+        VALUES ($1, $2, $3, $4, $5, $6, 'assigned')
+        RETURNING *
+      `,
+      [
+        meetingId,
+        memberId,
+        taskType,
+        String(payload.groupName || defaultSocialGroup(taskType)).trim(),
+        String(payload.title).trim(),
+        String(payload.note || "").trim()
+      ]
+    );
+
+    if (memberId) {
+      await createNotification(
+        memberId,
+        "social_assignment",
+        "Social meeting assignment",
+        `You were assigned ${socialTaskLabel(taskType).toLowerCase()} for ${meetingResult.rows[0].title} on ${meetingResult.rows[0].meeting_date}.`,
+        "/social"
+      );
+    }
+
+    return sendJson(res, 201, { assignment: rows[0] });
+  }
+
+  const socialAssignmentMatch = pathname.match(/^\/api\/admin\/social\/assignments\/(\d+)$/);
+  if (method === "PATCH" && socialAssignmentMatch) {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    const assignmentId = parseId(socialAssignmentMatch[1]);
+    const payload = await readJson(req);
+    requireFields(payload, ["title"]);
+    const taskType = normalizeSocialTaskType(payload.taskType);
+    const memberId = payload.userId ? parseId(payload.userId) : null;
+    const status = ["assigned", "completed", "cancelled"].includes(payload.status) ? payload.status : "assigned";
+
+    const { rows } = await query(
+      `
+        UPDATE social_assignments
+        SET user_id = $2,
+            task_type = $3,
+            group_name = $4,
+            title = $5,
+            note = $6,
+            status = $7,
+            updated_at = now()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [
+        assignmentId,
+        memberId,
+        taskType,
+        String(payload.groupName || defaultSocialGroup(taskType)).trim(),
+        String(payload.title).trim(),
+        String(payload.note || "").trim(),
+        status
+      ]
+    );
+
+    if (rows.length === 0) {
+      return sendError(res, 404, "Social assignment not found.");
+    }
+
+    return sendJson(res, 200, { assignment: rows[0] });
+  }
+
+  const socialPublishMatch = pathname.match(/^\/api\/admin\/social\/meetings\/(\d+)\/publish$/);
+  if (method === "POST" && socialPublishMatch) {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    const meetingId = parseId(socialPublishMatch[1]);
+    const meetingResult = await query("SELECT * FROM social_meetings WHERE id = $1", [meetingId]);
+    const meeting = meetingResult.rows[0];
+    if (!meeting) {
+      return sendError(res, 404, "Social meeting not found.");
+    }
+
+    const assignmentsResult = await query(
+      `
+        SELECT social_assignments.*, users.full_name AS member_name, users.email AS member_email
+        FROM social_assignments
+        LEFT JOIN users ON users.id = social_assignments.user_id
+        WHERE social_assignments.meeting_id = $1
+        ORDER BY task_type ASC, created_at ASC
+      `,
+      [meetingId]
+    );
+    const requestsResult = await query(
+      `
+        SELECT social_resource_requests.*,
+               social_resources.name AS resource_name,
+               social_meetings.title AS meeting_title,
+               social_meetings.meeting_date,
+               users.full_name AS requester_name,
+               users.email AS requester_email
+        FROM social_resource_requests
+        JOIN social_resources ON social_resources.id = social_resource_requests.resource_id
+        JOIN users ON users.id = social_resource_requests.requested_by
+        LEFT JOIN social_meetings ON social_meetings.id = social_resource_requests.meeting_id
+        WHERE social_resource_requests.meeting_id = $1
+        ORDER BY social_resource_requests.created_at ASC
+      `,
+      [meetingId]
+    );
+    const assignments = assignmentsResult.rows.map(toSocialAssignment);
+    const resourceRequests = requestsResult.rows.map(toSocialResourceRequest);
+    const body = buildSocialAnnouncementBody(meeting, assignmentsResult.rows, resourceRequests);
+    const announcementResult = await query(
+      `
+        INSERT INTO announcements (title, body, category, status, created_by, published_at)
+        VALUES ($1, $2, 'social', 'published', $3, now())
+        RETURNING *
+      `,
+      [`Social coordinator schedule: ${meeting.title}`, body, admin.id]
+    );
+
+    const updatedMeeting = await query(
+      `
+        UPDATE social_meetings
+        SET status = 'published',
+            announcement_id = $2,
+            published_at = now(),
+            updated_at = now()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [meetingId, announcementResult.rows[0].id]
+    );
+
+    await createAnnouncementNotifications(announcementResult.rows[0]);
+
+    return sendJson(res, 200, {
+      meeting: toSocialMeeting(updatedMeeting.rows[0], assignments, resourceRequests),
+      announcement: announcementResult.rows[0]
+    });
+  }
+
+  if (method === "POST" && pathname === "/api/admin/social/resources") {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    const payload = await readJson(req);
+    requireFields(payload, ["name"]);
+    const totalQuantity = Math.max(0, Math.trunc(Number(payload.totalQuantity || 0)));
+    const availableQuantity = Math.max(0, Math.trunc(Number(payload.availableQuantity || totalQuantity)));
+
+    const { rows } = await query(
+      `
+        INSERT INTO social_resources (name, description, total_quantity, available_quantity, storage_location, status, created_by)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING *
+      `,
+      [
+        String(payload.name).trim(),
+        String(payload.description || "").trim(),
+        totalQuantity,
+        Math.min(availableQuantity, totalQuantity),
+        String(payload.storageLocation || "").trim(),
+        normalizeResourceStatus(payload.status),
+        admin.id
+      ]
+    );
+
+    return sendJson(res, 201, { resource: toSocialResource(rows[0]) });
+  }
+
+  const socialResourceMatch = pathname.match(/^\/api\/admin\/social\/resources\/(\d+)$/);
+  if (method === "PATCH" && socialResourceMatch) {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    const resourceId = parseId(socialResourceMatch[1]);
+    const payload = await readJson(req);
+    requireFields(payload, ["name"]);
+    const totalQuantity = Math.max(0, Math.trunc(Number(payload.totalQuantity || 0)));
+    const availableQuantity = Math.max(0, Math.trunc(Number(payload.availableQuantity || 0)));
+
+    const { rows } = await query(
+      `
+        UPDATE social_resources
+        SET name = $2,
+            description = $3,
+            total_quantity = $4,
+            available_quantity = $5,
+            storage_location = $6,
+            status = $7,
+            updated_at = now()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [
+        resourceId,
+        String(payload.name).trim(),
+        String(payload.description || "").trim(),
+        totalQuantity,
+        Math.min(availableQuantity, totalQuantity),
+        String(payload.storageLocation || "").trim(),
+        normalizeResourceStatus(payload.status)
+      ]
+    );
+
+    if (rows.length === 0) {
+      return sendError(res, 404, "Resource not found.");
+    }
+
+    return sendJson(res, 200, { resource: toSocialResource(rows[0]) });
+  }
+
+  if (method === "POST" && pathname === "/api/social/resource-requests") {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const payload = await readJson(req);
+    const resourceId = parseId(payload.resourceId);
+    const meetingId = payload.meetingId ? parseId(payload.meetingId) : null;
+    const quantity = Math.max(1, Math.trunc(Number(payload.quantity || 1)));
+
+    const resourceResult = await query("SELECT id, name, status FROM social_resources WHERE id = $1 AND status = 'active'", [resourceId]);
+    if (resourceResult.rows.length === 0) {
+      return sendError(res, 404, "Active resource not found.");
+    }
+
+    const { rows } = await query(
+      `
+        INSERT INTO social_resource_requests (meeting_id, resource_id, requested_by, quantity, needed_date, return_date, note)
+        VALUES (NULLIF($1, 0), $2, $3, $4, NULLIF($5, '')::date, NULLIF($6, '')::date, $7)
+        RETURNING *
+      `,
+      [
+        meetingId || 0,
+        resourceId,
+        user.id,
+        quantity,
+        payload.neededDate || "",
+        payload.returnDate || "",
+        String(payload.note || "").trim()
+      ]
+    );
+
+    await notifyAdmins(
+      "social_resource_request",
+      "New resource request",
+      `${user.fullName} requested ${quantity} ${resourceResult.rows[0].name} for a social meeting.`,
+      "/admin"
+    );
+
+    return sendJson(res, 201, { request: rows[0] });
+  }
+
+  const socialResourceRequestStatusMatch = pathname.match(/^\/api\/admin\/social\/resource-requests\/(\d+)\/status$/);
+  if (method === "PATCH" && socialResourceRequestStatusMatch) {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    const requestId = parseId(socialResourceRequestStatusMatch[1]);
+    const payload = await readJson(req);
+    const status = normalizeResourceRequestStatus(payload.status);
+    const adminNote = String(payload.adminNote || "").trim();
+
+    const result = await withTransaction(async (client) => {
+      const currentResult = await client.query(
+        `
+          SELECT social_resource_requests.*, social_resources.available_quantity, social_resources.name AS resource_name
+          FROM social_resource_requests
+          JOIN social_resources ON social_resources.id = social_resource_requests.resource_id
+          WHERE social_resource_requests.id = $1
+          FOR UPDATE
+        `,
+        [requestId]
+      );
+      const current = currentResult.rows[0];
+      if (!current) {
+        throw Object.assign(new Error("Resource request not found."), { statusCode: 404 });
+      }
+
+      if (status === "approved" && current.status !== "approved" && Number(current.available_quantity) < Number(current.quantity)) {
+        throw Object.assign(new Error("Not enough available resource quantity to approve this request."), { statusCode: 400 });
+      }
+
+      if (status === "approved" && current.status !== "approved") {
+        await client.query(
+          "UPDATE social_resources SET available_quantity = available_quantity - $2, updated_at = now() WHERE id = $1",
+          [current.resource_id, current.quantity]
+        );
+      }
+
+      if ((status === "declined" || status === "returned") && current.status === "approved") {
+        await client.query(
+          "UPDATE social_resources SET available_quantity = available_quantity + $2, updated_at = now() WHERE id = $1",
+          [current.resource_id, current.quantity]
+        );
+      }
+
+      const updated = await client.query(
+        `
+          UPDATE social_resource_requests
+          SET status = $2,
+              admin_note = $3,
+              reviewed_by = $4,
+              reviewed_at = now(),
+              updated_at = now()
+          WHERE id = $1
+          RETURNING *
+        `,
+        [requestId, status, adminNote, admin.id]
+      );
+
+      return { request: updated.rows[0], previous: current };
+    });
+
+    await createNotification(
+      result.request.requested_by,
+      "social_resource_request",
+      "Resource request updated",
+      `Your request for ${result.previous.resource_name} was marked ${status}.`,
+      "/social"
+    );
+
+    return sendJson(res, 200, { request: result.request });
   }
 
   if (method === "POST" && pathname === "/api/questions") {
@@ -2357,13 +3027,14 @@ async function handleApi(req, res, url) {
           body,
           image_name,
           image_type,
-          image_size,
-          image_data_url,
-          display_order,
-          status,
-          created_by
+            image_size,
+            image_data_url,
+            display_order,
+            status,
+            archived_at,
+            created_by
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'published', $9)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'published', NULL, $9)
         RETURNING *
       `,
       [
@@ -2382,6 +3053,37 @@ async function handleApi(req, res, url) {
     return sendJson(res, 201, { position: toLeadershipPosition(rows[0]) });
   }
 
+  const aboutPositionStatusMatch = pathname.match(/^\/api\/admin\/about\/positions\/(\d+)\/status$/);
+  if (method === "PATCH" && aboutPositionStatusMatch) {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    const positionId = parseId(aboutPositionStatusMatch[1]);
+    const payload = await readJson(req);
+    const status = normalizeLeadershipStatus(payload.status);
+
+    const { rows } = await query(
+      `
+        UPDATE leadership_positions
+        SET status = $2,
+            archived_at = CASE
+              WHEN $2 = 'archived' AND status <> 'archived' THEN now()
+              WHEN $2 = 'archived' THEN COALESCE(archived_at, now())
+              ELSE NULL
+            END,
+            updated_at = now()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [positionId, status]
+    );
+
+    if (rows.length === 0) {
+      return sendError(res, 404, "Leadership position not found.");
+    }
+
+    return sendJson(res, 200, { position: toLeadershipPosition(rows[0]) });
+  }
+
   const aboutPositionMatch = pathname.match(/^\/api\/admin\/about\/positions\/(\d+)$/);
   if (method === "PATCH" && aboutPositionMatch) {
     const admin = await requireAdmin(req, res);
@@ -2391,7 +3093,7 @@ async function handleApi(req, res, url) {
     requireFields(payload, ["title"]);
     const image = validateImageUpload(payload.image);
     const displayOrder = Number(payload.displayOrder || 0);
-    const status = payload.status === "hidden" ? "hidden" : "published";
+    const status = normalizeLeadershipStatus(payload.status);
 
     const { rows } = await query(
       `
@@ -2405,6 +3107,11 @@ async function handleApi(req, res, url) {
             image_data_url = CASE WHEN $5 <> '' THEN $8 ELSE image_data_url END,
             display_order = $9,
             status = $10,
+            archived_at = CASE
+              WHEN $10 = 'archived' AND status <> 'archived' THEN now()
+              WHEN $10 = 'archived' THEN COALESCE(archived_at, now())
+              ELSE NULL
+            END,
             updated_at = now()
         WHERE id = $1
         RETURNING *
@@ -2449,9 +3156,10 @@ async function handleApi(req, res, url) {
           image_data_url,
           display_order,
           status,
+          hidden_at,
           created_by
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, 'published', $8)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, 'published', NULL, $8)
         RETURNING *
       `,
       [
@@ -2467,6 +3175,44 @@ async function handleApi(req, res, url) {
     );
 
     return sendJson(res, 201, { article: toPublicAboutArticle(rows[0]) });
+  }
+
+  if (method === "POST" && pathname === "/api/admin/about/articles/cleanup-hidden") {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    const deletedCount = await cleanupExpiredHiddenAboutArticles();
+    return sendJson(res, 200, { deletedCount });
+  }
+
+  const aboutArticleStatusMatch = pathname.match(/^\/api\/admin\/about\/articles\/(\d+)\/status$/);
+  if (method === "PATCH" && aboutArticleStatusMatch) {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    const articleId = parseId(aboutArticleStatusMatch[1]);
+    const payload = await readJson(req);
+    const status = payload.status === "hidden" ? "hidden" : "published";
+
+    const { rows } = await query(
+      `
+        UPDATE public_about_articles
+        SET status = $2,
+            hidden_at = CASE
+              WHEN $2 = 'hidden' AND status <> 'hidden' THEN now()
+              WHEN $2 = 'hidden' THEN COALESCE(hidden_at, now())
+              ELSE NULL
+            END,
+            updated_at = now()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [articleId, status]
+    );
+
+    if (rows.length === 0) {
+      return sendError(res, 404, "Public article not found.");
+    }
+
+    return sendJson(res, 200, { article: toPublicAboutArticle(rows[0]) });
   }
 
   const aboutArticleMatch = pathname.match(/^\/api\/admin\/about\/articles\/(\d+)$/);
@@ -2491,6 +3237,11 @@ async function handleApi(req, res, url) {
             image_data_url = CASE WHEN $4 <> '' THEN $7 ELSE image_data_url END,
             display_order = $8,
             status = $9,
+            hidden_at = CASE
+              WHEN $9 = 'hidden' AND status <> 'hidden' THEN now()
+              WHEN $9 = 'hidden' THEN COALESCE(hidden_at, now())
+              ELSE NULL
+            END,
             updated_at = now()
         WHERE id = $1
         RETURNING *
@@ -2513,6 +3264,19 @@ async function handleApi(req, res, url) {
     }
 
     return sendJson(res, 200, { article: toPublicAboutArticle(rows[0]) });
+  }
+
+  if (method === "DELETE" && aboutArticleMatch) {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    const articleId = parseId(aboutArticleMatch[1]);
+    const { rowCount } = await query("DELETE FROM public_about_articles WHERE id = $1", [articleId]);
+
+    if (rowCount === 0) {
+      return sendError(res, 404, "Public article not found.");
+    }
+
+    return sendJson(res, 200, { deleted: true });
   }
 
   const paymentDetailMatch = pathname.match(/^\/api\/admin\/payment-details\/([a-z_]+)$/);
@@ -2578,7 +3342,7 @@ async function handleApi(req, res, url) {
   if (method === "GET" && pathname === "/api/admin/summary") {
     const admin = await requireAdmin(req, res);
     if (!admin) return;
-    const [members, questions, payments, ballots, announcements, events, expenditures, financialSummary, paymentDetails, about] = await Promise.all([
+    const [members, questions, payments, ballots, announcements, events, expenditures, financialSummary, paymentDetails, about, social] = await Promise.all([
       listMembers(),
       listQuestions({ includePending: true }),
       listPayments(admin, { includeAll: true }),
@@ -2588,9 +3352,10 @@ async function handleApi(req, res, url) {
       listExpenditures(),
       getFinancialSummary(),
       listOrganizationPaymentDetails({ includeDisabled: true }),
-      getAboutContent({ includeHidden: true })
+      getAboutContent({ includeHidden: true }),
+      listSocialCoordinator(admin, { includeAll: true })
     ]);
-    return sendJson(res, 200, { members, questions, payments, ballots, announcements, events, expenditures, financialSummary, paymentDetails, about });
+    return sendJson(res, 200, { members, questions, payments, ballots, announcements, events, expenditures, financialSummary, paymentDetails, about, social });
   }
 
   return sendError(res, 404, "API route not found.");

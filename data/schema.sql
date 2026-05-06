@@ -113,7 +113,8 @@ CREATE TABLE IF NOT EXISTS leadership_positions (
   image_size INTEGER DEFAULT 0,
   image_data_url TEXT DEFAULT '',
   display_order INTEGER NOT NULL DEFAULT 0,
-  status TEXT NOT NULL DEFAULT 'published' CHECK (status IN ('published', 'hidden')),
+  status TEXT NOT NULL DEFAULT 'published' CHECK (status IN ('published', 'hidden', 'archived')),
+  archived_at TIMESTAMPTZ,
   created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -127,8 +128,12 @@ ALTER TABLE leadership_positions ADD COLUMN IF NOT EXISTS image_size INTEGER DEF
 ALTER TABLE leadership_positions ADD COLUMN IF NOT EXISTS image_data_url TEXT DEFAULT '';
 ALTER TABLE leadership_positions ADD COLUMN IF NOT EXISTS display_order INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE leadership_positions ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'published';
+ALTER TABLE leadership_positions ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
 ALTER TABLE leadership_positions DROP CONSTRAINT IF EXISTS leadership_positions_status_check;
-ALTER TABLE leadership_positions ADD CONSTRAINT leadership_positions_status_check CHECK (status IN ('published', 'hidden'));
+ALTER TABLE leadership_positions ADD CONSTRAINT leadership_positions_status_check CHECK (status IN ('published', 'hidden', 'archived'));
+UPDATE leadership_positions
+SET archived_at = COALESCE(archived_at, updated_at, created_at)
+WHERE status = 'archived' AND archived_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS public_about_articles (
   id BIGSERIAL PRIMARY KEY,
@@ -140,6 +145,7 @@ CREATE TABLE IF NOT EXISTS public_about_articles (
   image_data_url TEXT DEFAULT '',
   display_order INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'published' CHECK (status IN ('published', 'hidden')),
+  hidden_at TIMESTAMPTZ,
   created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -151,8 +157,12 @@ ALTER TABLE public_about_articles ADD COLUMN IF NOT EXISTS image_size INTEGER DE
 ALTER TABLE public_about_articles ADD COLUMN IF NOT EXISTS image_data_url TEXT DEFAULT '';
 ALTER TABLE public_about_articles ADD COLUMN IF NOT EXISTS display_order INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE public_about_articles ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'published';
+ALTER TABLE public_about_articles ADD COLUMN IF NOT EXISTS hidden_at TIMESTAMPTZ;
 ALTER TABLE public_about_articles DROP CONSTRAINT IF EXISTS public_about_articles_status_check;
 ALTER TABLE public_about_articles ADD CONSTRAINT public_about_articles_status_check CHECK (status IN ('published', 'hidden'));
+UPDATE public_about_articles
+SET hidden_at = COALESCE(hidden_at, updated_at, created_at)
+WHERE status = 'hidden' AND hidden_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS events (
   id BIGSERIAL PRIMARY KEY,
@@ -328,6 +338,108 @@ ALTER TABLE expenditures ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;
 ALTER TABLE expenditures DROP CONSTRAINT IF EXISTS expenditures_status_check;
 ALTER TABLE expenditures ADD CONSTRAINT expenditures_status_check CHECK (status IN ('draft', 'published'));
 
+CREATE TABLE IF NOT EXISTS social_meetings (
+  id BIGSERIAL PRIMARY KEY,
+  title TEXT NOT NULL,
+  meeting_date DATE NOT NULL UNIQUE,
+  location TEXT DEFAULT '',
+  notes TEXT DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published', 'completed', 'cancelled')),
+  announcement_id BIGINT REFERENCES announcements(id) ON DELETE SET NULL,
+  created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  published_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE social_meetings ADD COLUMN IF NOT EXISTS location TEXT DEFAULT '';
+ALTER TABLE social_meetings ADD COLUMN IF NOT EXISTS notes TEXT DEFAULT '';
+ALTER TABLE social_meetings ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'draft';
+ALTER TABLE social_meetings ADD COLUMN IF NOT EXISTS announcement_id BIGINT REFERENCES announcements(id) ON DELETE SET NULL;
+ALTER TABLE social_meetings ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;
+ALTER TABLE social_meetings DROP CONSTRAINT IF EXISTS social_meetings_status_check;
+ALTER TABLE social_meetings ADD CONSTRAINT social_meetings_status_check CHECK (status IN ('draft', 'published', 'completed', 'cancelled'));
+
+CREATE TABLE IF NOT EXISTS social_assignments (
+  id BIGSERIAL PRIMARY KEY,
+  meeting_id BIGINT NOT NULL REFERENCES social_meetings(id) ON DELETE CASCADE,
+  user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  task_type TEXT NOT NULL DEFAULT 'other' CHECK (task_type IN ('food', 'drinks', 'host', 'setup', 'cleanup', 'other')),
+  group_name TEXT NOT NULL DEFAULT 'general',
+  title TEXT NOT NULL,
+  note TEXT DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'assigned' CHECK (status IN ('assigned', 'completed', 'cancelled')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE social_assignments ADD COLUMN IF NOT EXISTS group_name TEXT NOT NULL DEFAULT 'general';
+ALTER TABLE social_assignments ADD COLUMN IF NOT EXISTS note TEXT DEFAULT '';
+ALTER TABLE social_assignments ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'assigned';
+ALTER TABLE social_assignments DROP CONSTRAINT IF EXISTS social_assignments_task_type_check;
+ALTER TABLE social_assignments ADD CONSTRAINT social_assignments_task_type_check CHECK (task_type IN ('food', 'drinks', 'host', 'setup', 'cleanup', 'other'));
+ALTER TABLE social_assignments DROP CONSTRAINT IF EXISTS social_assignments_status_check;
+ALTER TABLE social_assignments ADD CONSTRAINT social_assignments_status_check CHECK (status IN ('assigned', 'completed', 'cancelled'));
+
+CREATE TABLE IF NOT EXISTS social_resources (
+  id BIGSERIAL PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT DEFAULT '',
+  total_quantity INTEGER NOT NULL DEFAULT 0 CHECK (total_quantity >= 0),
+  available_quantity INTEGER NOT NULL DEFAULT 0 CHECK (available_quantity >= 0),
+  storage_location TEXT DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'retired')),
+  created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE social_resources ADD COLUMN IF NOT EXISTS description TEXT DEFAULT '';
+ALTER TABLE social_resources ADD COLUMN IF NOT EXISTS total_quantity INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE social_resources ADD COLUMN IF NOT EXISTS available_quantity INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE social_resources ADD COLUMN IF NOT EXISTS storage_location TEXT DEFAULT '';
+ALTER TABLE social_resources ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
+ALTER TABLE social_resources ADD COLUMN IF NOT EXISTS created_by BIGINT REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE social_resources DROP CONSTRAINT IF EXISTS social_resources_total_quantity_check;
+ALTER TABLE social_resources ADD CONSTRAINT social_resources_total_quantity_check CHECK (total_quantity >= 0);
+ALTER TABLE social_resources DROP CONSTRAINT IF EXISTS social_resources_available_quantity_check;
+ALTER TABLE social_resources ADD CONSTRAINT social_resources_available_quantity_check CHECK (available_quantity >= 0);
+ALTER TABLE social_resources DROP CONSTRAINT IF EXISTS social_resources_status_check;
+ALTER TABLE social_resources ADD CONSTRAINT social_resources_status_check CHECK (status IN ('active', 'retired'));
+
+INSERT INTO social_resources (name, description, total_quantity, available_quantity, storage_location, status)
+SELECT 'Chairs', 'Organization chairs available for member-hosted meetings.', 0, 0, '', 'active'
+WHERE NOT EXISTS (SELECT 1 FROM social_resources WHERE lower(name) = 'chairs');
+
+CREATE TABLE IF NOT EXISTS social_resource_requests (
+  id BIGSERIAL PRIMARY KEY,
+  meeting_id BIGINT REFERENCES social_meetings(id) ON DELETE SET NULL,
+  resource_id BIGINT NOT NULL REFERENCES social_resources(id) ON DELETE CASCADE,
+  requested_by BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity > 0),
+  needed_date DATE,
+  return_date DATE,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'declined', 'returned')),
+  note TEXT DEFAULT '',
+  admin_note TEXT DEFAULT '',
+  reviewed_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  reviewed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE social_resource_requests ADD COLUMN IF NOT EXISTS meeting_id BIGINT REFERENCES social_meetings(id) ON DELETE SET NULL;
+ALTER TABLE social_resource_requests ADD COLUMN IF NOT EXISTS needed_date DATE;
+ALTER TABLE social_resource_requests ADD COLUMN IF NOT EXISTS return_date DATE;
+ALTER TABLE social_resource_requests ADD COLUMN IF NOT EXISTS note TEXT DEFAULT '';
+ALTER TABLE social_resource_requests ADD COLUMN IF NOT EXISTS admin_note TEXT DEFAULT '';
+ALTER TABLE social_resource_requests ADD COLUMN IF NOT EXISTS reviewed_by BIGINT REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE social_resource_requests ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
+ALTER TABLE social_resource_requests DROP CONSTRAINT IF EXISTS social_resource_requests_quantity_check;
+ALTER TABLE social_resource_requests ADD CONSTRAINT social_resource_requests_quantity_check CHECK (quantity > 0);
+ALTER TABLE social_resource_requests DROP CONSTRAINT IF EXISTS social_resource_requests_status_check;
+ALTER TABLE social_resource_requests ADD CONSTRAINT social_resource_requests_status_check CHECK (status IN ('pending', 'approved', 'declined', 'returned'));
+
 CREATE TABLE IF NOT EXISTS notifications (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -343,6 +455,7 @@ CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
 CREATE INDEX IF NOT EXISTS idx_announcements_status_published ON announcements(status, published_at DESC);
 CREATE INDEX IF NOT EXISTS idx_leadership_status_order ON leadership_positions(status, display_order, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_public_about_articles_status_order ON public_about_articles(status, display_order, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_public_about_articles_hidden_at ON public_about_articles(hidden_at) WHERE status = 'hidden';
 CREATE INDEX IF NOT EXISTS idx_events_starts_at ON events(starts_at);
 CREATE INDEX IF NOT EXISTS idx_questions_status_created ON member_questions(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_ballots_status_created ON ballots(status, created_at DESC);
@@ -350,5 +463,11 @@ CREATE INDEX IF NOT EXISTS idx_votes_ballot_option ON votes(ballot_id, option_id
 CREATE INDEX IF NOT EXISTS idx_payments_user_created ON payments(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_payments_published ON payments(purpose, status, published_at DESC);
 CREATE INDEX IF NOT EXISTS idx_expenditures_status_date ON expenditures(status, expense_date DESC);
+CREATE INDEX IF NOT EXISTS idx_social_meetings_date ON social_meetings(meeting_date DESC);
+CREATE INDEX IF NOT EXISTS idx_social_assignments_meeting ON social_assignments(meeting_id);
+CREATE INDEX IF NOT EXISTS idx_social_assignments_user ON social_assignments(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_social_resources_status ON social_resources(status, name);
+CREATE INDEX IF NOT EXISTS idx_social_resource_requests_user ON social_resource_requests(requested_by, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_social_resource_requests_status ON social_resource_requests(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_users_membership_status ON users(membership_status);

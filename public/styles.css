@@ -203,6 +203,12 @@ a {
   border-radius: 8px;
 }
 
+.public-intro-logo.donate-image {
+  width: min(340px, 100%);
+  max-height: 260px;
+  aspect-ratio: auto;
+}
+
 .public-intro h1,
 .public-content-panel > h2,
 .public-section h2,
@@ -617,6 +623,57 @@ a {
   margin: 0 0 8px;
 }
 
+.publication-toolbar {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.45fr) minmax(220px, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+  margin: 14px 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.compact-metrics {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.publication-card {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.26fr) minmax(0, 1fr);
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+}
+
+.publication-card.editing,
+.publication-card.without-image {
+  grid-template-columns: 1fr;
+}
+
+.publication-card > img {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border-radius: 8px;
+}
+
+.publication-body {
+  min-width: 0;
+}
+
+.publication-body h4,
+.publication-body p {
+  margin: 0 0 8px;
+}
+
+.publication-actions {
+  margin-top: 14px;
+}
+
 .leadership-card img,
 .leadership-placeholder {
   width: 100%;
@@ -664,9 +721,27 @@ a {
   margin: 0 0 10px;
 }
 
-.event-admin-card {
+.event-admin-card,
+.social-meeting-card,
+.social-subsection,
+.compact-card {
   display: grid;
   gap: 12px;
+}
+
+.social-subsection {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.compact-card {
+  padding: 12px;
+  background: #fbfcfd;
+}
+
+.compact-list {
+  gap: 8px;
 }
 
 .event-edit-form textarea {
@@ -711,6 +786,9 @@ a {
 .status-pill.open,
 .status-pill.active,
 .status-pill.received,
+.status-pill.approved,
+.status-pill.returned,
+.status-pill.completed,
 .status-pill.published {
   background: var(--soft-green);
   color: #0f6840;
@@ -727,6 +805,8 @@ a {
 .status-pill.closed,
 .status-pill.cancelled,
 .status-pill.rejected,
+.status-pill.declined,
+.status-pill.retired,
 .status-pill.archived {
   background: var(--soft-red);
   color: var(--red);
@@ -926,7 +1006,9 @@ th {
 
   .form-grid,
   .metric-grid,
-  .side-nav {
+  .side-nav,
+  .publication-toolbar,
+  .publication-card {
     grid-template-columns: 1fr;
   }
 
