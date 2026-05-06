@@ -415,6 +415,15 @@ a {
   margin: 0 0 10px;
 }
 
+.event-admin-card {
+  display: grid;
+  gap: 12px;
+}
+
+.event-edit-form textarea {
+  min-height: 84px;
+}
+
 .item-meta {
   display: flex;
   flex-wrap: wrap;
@@ -586,6 +595,10 @@ a {
 
 .table-wrap {
   overflow-x: auto;
+}
+
+.table-wrap .muted {
+  overflow-wrap: anywhere;
 }
 
 table {

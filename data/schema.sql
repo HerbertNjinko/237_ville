@@ -85,10 +85,17 @@ CREATE TABLE IF NOT EXISTS events (
   location TEXT DEFAULT '',
   starts_at TIMESTAMPTZ NOT NULL,
   ends_at TIMESTAMPTZ,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived')),
+  archived_at TIMESTAMPTZ,
   created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE events ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
+ALTER TABLE events ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+ALTER TABLE events DROP CONSTRAINT IF EXISTS events_status_check;
+ALTER TABLE events ADD CONSTRAINT events_status_check CHECK (status IN ('active', 'archived'));
 
 CREATE TABLE IF NOT EXISTS member_questions (
   id BIGSERIAL PRIMARY KEY,
@@ -152,18 +159,27 @@ CREATE TABLE IF NOT EXISTS votes (
 
 CREATE TABLE IF NOT EXISTS payments (
   id BIGSERIAL PRIMARY KEY,
-  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
   purpose TEXT NOT NULL CHECK (purpose IN ('dues', 'donation', 'registration_fee')),
   amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
   method TEXT NOT NULL DEFAULT 'offline',
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'received', 'cancelled')),
   note TEXT DEFAULT '',
   external_reference TEXT DEFAULT '',
+  donor_name TEXT DEFAULT '',
+  donor_email TEXT DEFAULT '',
+  dwolla_transfer_url TEXT DEFAULT '',
+  processor_status TEXT DEFAULT '',
   reviewed_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
   reviewed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+ALTER TABLE payments ALTER COLUMN user_id DROP NOT NULL;
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS donor_name TEXT DEFAULT '';
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS donor_email TEXT DEFAULT '';
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS dwolla_transfer_url TEXT DEFAULT '';
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS processor_status TEXT DEFAULT '';
 ALTER TABLE payments DROP CONSTRAINT IF EXISTS payments_purpose_check;
 ALTER TABLE payments ADD CONSTRAINT payments_purpose_check CHECK (purpose IN ('dues', 'donation', 'registration_fee'));
 

@@ -20,6 +20,17 @@ export const config = {
       process.env.POLICY_BODY ||
       "Members agree to act respectfully, keep organization information accurate, pay required dues and fees, follow voting rules, protect member privacy, and support the mission and decisions of 237 Ville."
   },
+  dwolla: {
+    enabled: String(process.env.DWOLLA_ENABLED || "false").toLowerCase() === "true",
+    environment: String(process.env.DWOLLA_ENVIRONMENT || "sandbox").toLowerCase(),
+    key: process.env.DWOLLA_KEY || "",
+    secret: process.env.DWOLLA_SECRET || "",
+    companyFundingSourceUrl: process.env.DWOLLA_COMPANY_FUNDING_SOURCE_URL || "",
+    donorFundingSourceUrl:
+      process.env.DWOLLA_DONOR_FUNDING_SOURCE_URL ||
+      process.env.DWOLLA_SOURCE_FUNDING_SOURCE_URL ||
+      ""
+  },
   database:
     process.env.DATABASE_URL
       ? { connectionString: process.env.DATABASE_URL }

@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { createReadStream } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
@@ -132,6 +133,111 @@ function dollarsToCents(value) {
     throw Object.assign(new Error("Amount must be greater than zero."), { statusCode: 400 });
   }
   return Math.round(amount * 100);
+}
+
+function centsToDwollaAmount(cents) {
+  return (Number(cents || 0) / 100).toFixed(2);
+}
+
+function dwollaBaseUrl() {
+  return config.dwolla.environment === "production"
+    ? "https://api.dwolla.com"
+    : "https://api-sandbox.dwolla.com";
+}
+
+async function getDwollaAccessToken() {
+  if (!config.dwolla.enabled) {
+    throw new Error("Dwolla is disabled.");
+  }
+
+  if (!config.dwolla.key || !config.dwolla.secret) {
+    throw new Error("Dwolla API key and secret are not configured.");
+  }
+
+  const credentials = Buffer.from(`${config.dwolla.key}:${config.dwolla.secret}`).toString("base64");
+  const response = await fetch(`${dwollaBaseUrl()}/token`, {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${credentials}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json"
+    },
+    body: "grant_type=client_credentials"
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || !payload.access_token) {
+    throw new Error(payload.message || payload.error_description || "Dwolla token request failed.");
+  }
+
+  return payload.access_token;
+}
+
+async function createDwollaDonationTransfer({ amountCents, sourceFundingSourceUrl, donorName, donorEmail }) {
+  if (!config.dwolla.enabled) {
+    return { transferUrl: "", processorStatus: "dwolla_disabled", note: "Dwolla is disabled." };
+  }
+
+  if (!config.dwolla.companyFundingSourceUrl) {
+    return {
+      transferUrl: "",
+      processorStatus: "dwolla_destination_missing",
+      note: "Dwolla destination funding source is not configured."
+    };
+  }
+
+  const sourceUrl = String(sourceFundingSourceUrl || config.dwolla.donorFundingSourceUrl || "").trim();
+  if (!sourceUrl) {
+    return {
+      transferUrl: "",
+      processorStatus: "dwolla_source_missing",
+      note: "Dwolla transfer was not started because no donor funding source was provided."
+    };
+  }
+
+  const token = await getDwollaAccessToken();
+  const correlationId = randomUUID();
+  const response = await fetch(`${dwollaBaseUrl()}/transfers`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.dwolla.v1.hal+json",
+      "Content-Type": "application/vnd.dwolla.v1.hal+json",
+      "Idempotency-Key": correlationId
+    },
+    body: JSON.stringify({
+      _links: {
+        source: { href: sourceUrl },
+        destination: { href: config.dwolla.companyFundingSourceUrl }
+      },
+      amount: {
+        currency: "USD",
+        value: centsToDwollaAmount(amountCents)
+      },
+      correlationId,
+      metadata: {
+        source: "237_ville_anonymous_donation",
+        donorName: String(donorName || "Anonymous").slice(0, 80),
+        donorEmail: String(donorEmail || "").slice(0, 120)
+      }
+    })
+  });
+
+  if (response.status !== 201) {
+    const payload = await response.json().catch(() => ({}));
+    const detail =
+      payload.message ||
+      payload.error_description ||
+      payload._embedded?.errors?.map((item) => item.message).join("; ") ||
+      "Dwolla transfer request failed.";
+    throw new Error(detail);
+  }
+
+  return {
+    transferUrl: response.headers.get("location") || "",
+    processorStatus: "dwolla_pending",
+    note: "Dwolla sandbox transfer was created."
+  };
 }
 
 function validateIdentityDocument(document) {
@@ -344,12 +450,15 @@ async function listAdminAnnouncements(limit = 100) {
 }
 
 async function listEvents(limit = 30) {
+  await archiveExpiredEvents();
+
   const { rows } = await query(
     `
       SELECT events.*, users.full_name AS author_name
       FROM events
       LEFT JOIN users ON users.id = events.created_by
-      WHERE events.starts_at >= now() - interval '1 day'
+      WHERE events.status = 'active'
+        AND COALESCE(events.ends_at, events.starts_at) >= now() - interval '1 day'
       ORDER BY events.starts_at ASC
       LIMIT $1
     `,
@@ -363,17 +472,23 @@ async function listEvents(limit = 30) {
     location: row.location || "",
     startsAt: row.starts_at,
     endsAt: row.ends_at,
+    status: row.status || "active",
+    archivedAt: row.archived_at,
     authorName: row.author_name || "237 Ville"
   }));
 }
 
 async function listAdminEvents(limit = 100) {
+  await archiveExpiredEvents();
+
   const { rows } = await query(
     `
       SELECT events.*, users.full_name AS author_name
       FROM events
       LEFT JOIN users ON users.id = events.created_by
-      ORDER BY events.starts_at DESC
+      ORDER BY
+        CASE events.status WHEN 'active' THEN 0 ELSE 1 END,
+        events.starts_at DESC
       LIMIT $1
     `,
     [limit]
@@ -386,8 +501,23 @@ async function listAdminEvents(limit = 100) {
     location: row.location || "",
     startsAt: row.starts_at,
     endsAt: row.ends_at,
+    status: row.status || "active",
+    archivedAt: row.archived_at,
     authorName: row.author_name || "237 Ville"
   }));
+}
+
+async function archiveExpiredEvents() {
+  await query(
+    `
+      UPDATE events
+      SET status = 'archived',
+          archived_at = COALESCE(archived_at, now()),
+          updated_at = now()
+      WHERE status = 'active'
+        AND COALESCE(ends_at, starts_at) < now() - interval '30 days'
+    `
+  );
 }
 
 async function listQuestions({ includePending = false } = {}) {
@@ -549,11 +679,11 @@ async function listBallots(user, { includeDrafts = false, includeArchived = fals
 
 async function listPayments(user, { includeAll = false } = {}) {
   const { rows } = includeAll
-    ? await query(
+      ? await query(
         `
           SELECT payments.*, users.full_name, users.email
           FROM payments
-          JOIN users ON users.id = payments.user_id
+          LEFT JOIN users ON users.id = payments.user_id
           ORDER BY payments.created_at DESC
           LIMIT 100
         `
@@ -562,7 +692,7 @@ async function listPayments(user, { includeAll = false } = {}) {
         `
           SELECT payments.*, users.full_name, users.email
           FROM payments
-          JOIN users ON users.id = payments.user_id
+          LEFT JOIN users ON users.id = payments.user_id
           WHERE payments.user_id = $1
           ORDER BY payments.created_at DESC
           LIMIT 50
@@ -572,15 +702,19 @@ async function listPayments(user, { includeAll = false } = {}) {
 
   return rows.map((row) => ({
     id: Number(row.id),
-    userId: Number(row.user_id),
-    memberName: row.full_name,
-    memberEmail: row.email,
+    userId: row.user_id ? Number(row.user_id) : null,
+    memberName: row.full_name || row.donor_name || "Anonymous donor",
+    memberEmail: row.email || row.donor_email || "",
     purpose: row.purpose,
     amountCents: Number(row.amount_cents),
     method: row.method,
     status: row.status,
     note: row.note || "",
     externalReference: row.external_reference || "",
+    donorName: row.donor_name || "",
+    donorEmail: row.donor_email || "",
+    dwollaTransferUrl: row.dwolla_transfer_url || "",
+    processorStatus: row.processor_status || "",
     createdAt: row.created_at,
     reviewedAt: row.reviewed_at
   }));
@@ -777,6 +911,74 @@ async function handleApi(req, res, url) {
       }
       throw error;
     }
+  }
+
+  if (method === "POST" && pathname === "/api/donations/anonymous") {
+    const payload = await readJson(req);
+    const amountCents = dollarsToCents(payload.amount);
+    const donorName = String(payload.donorName || "").trim();
+    const donorEmail = normalizeEmail(payload.donorEmail || "");
+    const donorFundingSourceUrl = String(payload.donorFundingSourceUrl || "").trim();
+    const donorNote = String(payload.note || "").trim();
+    let dwollaResult = { transferUrl: "", processorStatus: "not_started", note: "" };
+
+    try {
+      dwollaResult = await createDwollaDonationTransfer({
+        amountCents,
+        sourceFundingSourceUrl: donorFundingSourceUrl,
+        donorName,
+        donorEmail
+      });
+    } catch (error) {
+      dwollaResult = {
+        transferUrl: "",
+        processorStatus: "dwolla_error",
+        note: `Dwolla transfer error: ${String(error.message || "Unknown error").slice(0, 280)}`
+      };
+    }
+
+    const note = [donorNote, dwollaResult.note].filter(Boolean).join("\n");
+    const { rows } = await query(
+      `
+        INSERT INTO payments (
+          user_id,
+          purpose,
+          amount_cents,
+          method,
+          note,
+          external_reference,
+          donor_name,
+          donor_email,
+          dwolla_transfer_url,
+          processor_status
+        )
+        VALUES (NULL, 'donation', $1, 'dwolla_sandbox', $2, $3, $4, $5, $3, $6)
+        RETURNING *
+      `,
+      [
+        amountCents,
+        note,
+        dwollaResult.transferUrl,
+        donorName,
+        donorEmail,
+        dwollaResult.processorStatus
+      ]
+    );
+
+    await notifyAdmins(
+      "donation",
+      "Anonymous donation submitted",
+      `${donorName || "Anonymous donor"} submitted a ${centsToDwollaAmount(amountCents)} donation for review.`,
+      "/admin"
+    );
+
+    return sendJson(res, 201, {
+      message: dwollaResult.transferUrl
+        ? "Donation submitted through Dwolla sandbox."
+        : "Donation submitted for admin review.",
+      payment: rows[0],
+      processorStatus: dwollaResult.processorStatus
+    });
   }
 
   if (method === "POST" && pathname === "/api/auth/login") {
@@ -1109,6 +1311,67 @@ async function handleApi(req, res, url) {
     );
 
     return sendJson(res, 201, { event: rows[0] });
+  }
+
+  const eventUpdateMatch = pathname.match(/^\/api\/admin\/events\/(\d+)$/);
+  if (method === "PATCH" && eventUpdateMatch) {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    const eventId = parseId(eventUpdateMatch[1]);
+    const payload = await readJson(req);
+    requireFields(payload, ["title", "startsAt"]);
+
+    const { rows } = await query(
+      `
+        UPDATE events
+        SET title = $2,
+            description = $3,
+            location = $4,
+            starts_at = $5,
+            ends_at = NULLIF($6, '')::timestamptz,
+            updated_at = now()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [
+        eventId,
+        String(payload.title).trim(),
+        String(payload.description || "").trim(),
+        String(payload.location || "").trim(),
+        payload.startsAt,
+        payload.endsAt || ""
+      ]
+    );
+
+    if (rows.length === 0) {
+      return sendError(res, 404, "Event not found.");
+    }
+
+    return sendJson(res, 200, { event: rows[0] });
+  }
+
+  const eventArchiveMatch = pathname.match(/^\/api\/admin\/events\/(\d+)\/archive$/);
+  if (method === "POST" && eventArchiveMatch) {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    const eventId = parseId(eventArchiveMatch[1]);
+    const { rows } = await query(
+      `
+        UPDATE events
+        SET status = 'archived',
+            archived_at = COALESCE(archived_at, now()),
+            updated_at = now()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [eventId]
+    );
+
+    if (rows.length === 0) {
+      return sendError(res, 404, "Event not found.");
+    }
+
+    return sendJson(res, 200, { event: rows[0] });
   }
 
   if (method === "POST" && pathname === "/api/questions") {
@@ -1581,7 +1844,10 @@ async function handleApi(req, res, url) {
     if (!admin) return;
     const paymentId = parseId(paymentStatusMatch[1]);
     const payload = await readJson(req);
-    const status = ["pending", "received", "cancelled"].includes(payload.status) ? payload.status : "pending";
+    const status = ["received", "cancelled"].includes(payload.status) ? payload.status : "";
+    if (!status) {
+      return sendError(res, 400, "Payment can only be finalized as received or cancelled.");
+    }
     const payment = await withTransaction(async (client) => {
       const paymentResult = await client.query(
         `
@@ -1590,6 +1856,7 @@ async function handleApi(req, res, url) {
               reviewed_by = $3,
               reviewed_at = now()
           WHERE id = $1
+            AND status = 'pending'
           RETURNING *
         `,
         [paymentId, status, admin.id]
@@ -1597,7 +1864,7 @@ async function handleApi(req, res, url) {
 
       const row = paymentResult.rows[0];
 
-      if (row?.purpose === "registration_fee") {
+      if (row?.purpose === "registration_fee" && row.user_id) {
         const nextStatus = status === "received" ? "active" : "pending_fee";
         await client.query(
           `
@@ -1614,10 +1881,10 @@ async function handleApi(req, res, url) {
     });
 
     if (!payment) {
-      return sendError(res, 404, "Payment not found.");
+      return sendError(res, 404, "Payment not found or already finalized.");
     }
 
-    if (payment.purpose === "registration_fee" && status === "received") {
+    if (payment.purpose === "registration_fee" && status === "received" && payment.user_id) {
       await createNotification(
         payment.user_id,
         "registration_fee",
@@ -1627,7 +1894,7 @@ async function handleApi(req, res, url) {
       );
     }
 
-    if (payment.purpose === "registration_fee" && status === "cancelled") {
+    if (payment.purpose === "registration_fee" && status === "cancelled" && payment.user_id) {
       await createNotification(
         payment.user_id,
         "registration_fee",

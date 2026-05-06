@@ -66,6 +66,14 @@ function formatDate(value, options = {}) {
   }).format(date);
 }
 
+function toDatetimeLocalValue(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return localDate.toISOString().slice(0, 16);
+}
+
 function formatMoney(cents = 0) {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
@@ -218,6 +226,9 @@ function render() {
 
 function renderAuth() {
   const isRegister = state.authMode === "register";
+  const isDonate = state.authMode === "donate";
+  const formAction = isDonate ? "anonymous-donation" : isRegister ? "register" : "login";
+  const heading = isDonate ? "Make a donation" : isRegister ? "Create member account" : "Member sign in";
 
   app.innerHTML = `
     <main class="auth-layout">
@@ -232,11 +243,12 @@ function renderAuth() {
         </div>
         <div class="auth-form-panel">
           <div class="auth-tabs" role="tablist" aria-label="Authentication">
-            <button class="tab-button ${!isRegister ? "active" : ""}" data-auth-mode="login" type="button">Sign in</button>
+            <button class="tab-button ${!isRegister && !isDonate ? "active" : ""}" data-auth-mode="login" type="button">Sign in</button>
             <button class="tab-button ${isRegister ? "active" : ""}" data-auth-mode="register" type="button">Register</button>
+            <button class="tab-button ${isDonate ? "active" : ""}" data-auth-mode="donate" type="button">Donate</button>
           </div>
-          <h2>${isRegister ? "Create member account" : "Member sign in"}</h2>
-          <form class="form-stack" data-action="${isRegister ? "register" : "login"}">
+          <h2>${heading}</h2>
+          <form class="form-stack" data-action="${formAction}">
             ${
               isRegister
                 ? `<div class="form-grid">
@@ -251,10 +263,35 @@ function renderAuth() {
                   </div>`
                 : ""
             }
-            <label class="field">
-              <span>Email</span>
-              <input name="email" type="email" autocomplete="email" required>
-            </label>
+            ${
+              isDonate
+                ? `<div class="form-grid">
+                    <label class="field">
+                      <span>Name</span>
+                      <input name="donorName" autocomplete="name">
+                    </label>
+                    <label class="field">
+                      <span>Email</span>
+                      <input name="donorEmail" type="email" autocomplete="email">
+                    </label>
+                  </div>
+                  <label class="field">
+                    <span>Donation amount</span>
+                    <input name="amount" type="number" min="1" step="0.01" required>
+                  </label>
+                  <label class="field">
+                    <span>Dwolla sandbox source URL</span>
+                    <input name="donorFundingSourceUrl" placeholder="https://api-sandbox.dwolla.com/funding-sources/...">
+                  </label>
+                  <label class="field">
+                    <span>Note</span>
+                    <textarea name="note"></textarea>
+                  </label>`
+                : `<label class="field">
+                    <span>Email</span>
+                    <input name="email" type="email" autocomplete="email" required>
+                  </label>`
+            }
             ${
               isRegister
                 ? `<label class="field">
@@ -269,14 +306,14 @@ function renderAuth() {
                 : ""
             }
             ${
-              isRegister
+              isRegister || isDonate
                 ? ""
                 : `<label class="field">
                     <span>Password</span>
                     <input name="password" type="password" autocomplete="current-password" minlength="8" required>
                   </label>`
             }
-            <button class="primary-button" type="submit">${isRegister ? "Create account" : "Sign in"}</button>
+            <button class="primary-button" type="submit">${isDonate ? "Donate" : isRegister ? "Create account" : "Sign in"}</button>
             <p class="message ${state.messageType === "ok" ? "ok" : ""}">${escapeHtml(state.message)}</p>
           </form>
         </div>
@@ -961,28 +998,41 @@ function renderPaymentTable(payments, adminMode) {
         </thead>
         <tbody>
           ${payments
-            .map(
-              (payment) => `
+            .map((payment) => {
+              const memberMeta = payment.memberEmail
+                ? `<br><span class="muted">${escapeHtml(payment.memberEmail)}</span>`
+                : "";
+              const processorMeta = [payment.processorStatus, payment.dwollaTransferUrl || payment.externalReference]
+                .filter(Boolean)
+                .join(" | ");
+              const actionCell =
+                payment.status === "pending"
+                  ? `<button class="secondary-button" data-click="payment-status" data-payment-id="${payment.id}" data-status="received" type="button">Received</button>`
+                  : `<span class="muted">Finalized</span>`;
+
+              return `
                 <tr>
-                  ${adminMode ? `<td>${escapeHtml(payment.memberName)}<br><span class="muted">${escapeHtml(payment.memberEmail)}</span></td>` : ""}
+                  ${adminMode ? `<td>${escapeHtml(payment.memberName)}${memberMeta}</td>` : ""}
                   <td>${escapeHtml(payment.purpose)}</td>
                   <td>${formatMoney(payment.amountCents)}</td>
-                  <td>${escapeHtml(payment.method)}</td>
+                  <td>
+                    ${escapeHtml(payment.method)}
+                    ${processorMeta ? `<br><span class="muted">${escapeHtml(processorMeta)}</span>` : ""}
+                  </td>
                   <td>${statusPill(payment.status)}</td>
                   <td>${formatDate(payment.createdAt)}</td>
                   ${
                     adminMode
                       ? `<td>
                           <div class="actions">
-                            <button class="secondary-button" data-click="payment-status" data-payment-id="${payment.id}" data-status="received" type="button">Received</button>
-                            <button class="danger-button" data-click="payment-status" data-payment-id="${payment.id}" data-status="cancelled" type="button">Cancel</button>
+                            ${actionCell}
                           </div>
                         </td>`
                       : ""
                   }
                 </tr>
-              `
-            )
+              `;
+            })
             .join("")}
         </tbody>
       </table>
@@ -1084,7 +1134,7 @@ function adminStats() {
     donors,
     pendingQuestions: (state.admin?.questions || []).filter((question) => question.status === "pending"),
     openBallots: (state.admin?.ballots || []).filter((ballot) => ballot.status === "open"),
-    upcomingEvents: (state.admin?.events || []).filter((event) => new Date(event.startsAt) >= new Date())
+    upcomingEvents: (state.admin?.events || []).filter((event) => event.status !== "archived" && new Date(event.startsAt) >= new Date())
   };
 }
 
@@ -1228,6 +1278,7 @@ function renderAdminQuestionsPage() {
 function renderAdminEvents() {
   const loading = requireAdminData("Loading events...");
   if (loading) return loading;
+  const events = state.admin.events || [];
 
   return `
     <section class="two-column">
@@ -1235,10 +1286,10 @@ function renderAdminEvents() {
         <div class="panel-header">
           <div>
             <h3>Organization events</h3>
-            <p>Upcoming and past scheduled events.</p>
+            <p>Create, edit, and archive organization events.</p>
           </div>
         </div>
-        ${renderEventList(state.admin.events || [])}
+        ${renderAdminEventManager(events)}
       </div>
       <aside class="panel">
         <div class="panel-header">
@@ -1280,6 +1331,62 @@ function renderEventForm() {
       </label>
       <button class="primary-button" type="submit">Create event</button>
     </form>
+  `;
+}
+
+function renderAdminEventManager(events) {
+  if (!events.length) return emptyState("No events are planned.");
+
+  return `
+    <div class="item-list">
+      ${events
+        .map(
+          (event) => `
+            <article class="item-card event-admin-card">
+              <div class="panel-header">
+                <div>
+                  <h4>${escapeHtml(event.title)}</h4>
+                  <p>${escapeHtml(event.location || "No venue set")}</p>
+                </div>
+                ${statusPill(event.status || "active")}
+              </div>
+              <form class="form-stack event-edit-form" data-action="update-event" data-event-id="${event.id}">
+                <label class="field">
+                  <span>Title</span>
+                  <input name="title" value="${escapeHtml(event.title)}" required>
+                </label>
+                <label class="field">
+                  <span>Venue</span>
+                  <input name="location" value="${escapeHtml(event.location || "")}">
+                </label>
+                <div class="form-grid">
+                  <label class="field">
+                    <span>Starts</span>
+                    <input name="startsAt" type="datetime-local" value="${toDatetimeLocalValue(event.startsAt)}" required>
+                  </label>
+                  <label class="field">
+                    <span>Ends</span>
+                    <input name="endsAt" type="datetime-local" value="${toDatetimeLocalValue(event.endsAt)}">
+                  </label>
+                </div>
+                <label class="field">
+                  <span>Description</span>
+                  <textarea name="description">${escapeHtml(event.description || "")}</textarea>
+                </label>
+                <div class="actions">
+                  <button class="primary-button" type="submit">Save changes</button>
+                  ${
+                    event.status === "archived"
+                      ? `<span class="muted">Archived ${formatDate(event.archivedAt)}</span>`
+                      : `<button class="secondary-button" data-click="event-archive" data-event-id="${event.id}" type="button">Archive</button>`
+                  }
+                </div>
+              </form>
+            </article>
+          `
+        )
+        .join("")}
+    </div>
   `;
 }
 
@@ -1927,6 +2034,18 @@ async function handleSubmit(event) {
       return;
     }
 
+    if (action === "anonymous-donation") {
+      const result = await api("/api/donations/anonymous", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      form.reset();
+      state.message = result.message || "Donation submitted.";
+      state.messageType = "ok";
+      render();
+      return;
+    }
+
     if (action === "change-password") {
       if (payload.newPassword !== payload.confirmPassword) {
         throw new Error("New password and confirmation do not match.");
@@ -2038,6 +2157,17 @@ async function handleSubmit(event) {
       });
       form.reset();
       state.message = "Event created.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
+    if (action === "update-event") {
+      await api(`/api/admin/events/${form.dataset.eventId}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload)
+      });
+      state.message = "Event updated.";
       state.messageType = "ok";
       await refreshAll({ includeAdmin: true });
       return;
@@ -2298,6 +2428,17 @@ async function handleClick(event) {
         body: "{}"
       });
       state.message = "Ballot archived.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
+    if (action === "event-archive") {
+      await api(`/api/admin/events/${button.dataset.eventId}/archive`, {
+        method: "POST",
+        body: "{}"
+      });
+      state.message = "Event archived.";
       state.messageType = "ok";
       await refreshAll({ includeAdmin: true });
       return;
