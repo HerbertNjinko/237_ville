@@ -231,6 +231,18 @@ a {
   color: var(--ink);
 }
 
+.sidebar .ghost-button,
+.auth-brand .ghost-button {
+  border-color: rgba(255, 255, 255, 0.75);
+  color: #ffffff;
+}
+
+.sidebar .ghost-button:hover,
+.auth-brand .ghost-button:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: #ffffff;
+}
+
 .vote-button {
   background: var(--ink);
   color: white;
@@ -455,7 +467,8 @@ a {
 }
 
 .status-pill.closed,
-.status-pill.cancelled {
+.status-pill.cancelled,
+.status-pill.rejected {
   background: var(--soft-red);
   color: var(--red);
 }
@@ -509,7 +522,8 @@ a {
 }
 
 .policy-document,
-.onboarding-notices {
+.onboarding-notices,
+.application-detail {
   display: grid;
   gap: 10px;
   margin: 0 0 16px;
@@ -522,6 +536,25 @@ a {
 .policy-document h3,
 .onboarding-notices h3 {
   margin: 0;
+}
+
+.application-detail p {
+  margin: 0;
+}
+
+.document-link {
+  color: var(--blue);
+  font-weight: 750;
+}
+
+.rejection-form {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.compact-form {
+  max-width: 360px;
 }
 
 .admin-section {

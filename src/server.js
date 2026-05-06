@@ -46,6 +46,13 @@ function toUser(row) {
     city: row.city || "",
     state: row.state || "",
     bio: row.bio || "",
+    registrationStatement: row.registration_statement || "",
+    identityDocument: {
+      name: row.identity_document_name || "",
+      type: row.identity_document_type || "",
+      size: Number(row.identity_document_size || 0),
+      dataUrl: row.identity_document_data_url || ""
+    },
     role: row.role,
     membershipStatus: row.membership_status,
     notificationOptIn: row.notification_opt_in,
@@ -55,6 +62,9 @@ function toUser(row) {
     policyVersion: row.policy_version || "",
     approvedAt: row.approved_at,
     approvedBy: row.approved_by ? Number(row.approved_by) : null,
+    rejectedAt: row.rejected_at,
+    rejectedBy: row.rejected_by ? Number(row.rejected_by) : null,
+    rejectionReason: row.rejection_reason || "",
     createdAt: row.created_at
   };
 }
@@ -81,7 +91,7 @@ async function readJson(req) {
 
   for await (const chunk of req) {
     body += chunk;
-    if (body.length > 1_000_000) {
+    if (body.length > 8_000_000) {
       throw Object.assign(new Error("Request body is too large."), { statusCode: 413 });
     }
   }
@@ -124,12 +134,42 @@ function dollarsToCents(value) {
   return Math.round(amount * 100);
 }
 
+function validateIdentityDocument(document) {
+  if (!document || typeof document !== "object") {
+    throw Object.assign(new Error("ID card upload is required."), { statusCode: 400 });
+  }
+
+  const name = String(document.name || "").trim();
+  const type = String(document.type || "").trim();
+  const size = Number(document.size || 0);
+  const dataUrl = String(document.dataUrl || "");
+  const acceptedTypes = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
+
+  if (!name || !type || !dataUrl) {
+    throw Object.assign(new Error("ID card upload is incomplete."), { statusCode: 400 });
+  }
+
+  if (!acceptedTypes.includes(type)) {
+    throw Object.assign(new Error("ID card must be a JPG, PNG, WebP, or PDF file."), { statusCode: 400 });
+  }
+
+  if (!Number.isFinite(size) || size <= 0 || size > 3_000_000) {
+    throw Object.assign(new Error("ID card file must be 3 MB or smaller."), { statusCode: 400 });
+  }
+
+  if (!dataUrl.startsWith(`data:${type};base64,`)) {
+    throw Object.assign(new Error("ID card upload is not valid."), { statusCode: 400 });
+  }
+
+  return { name, type, size, dataUrl };
+}
+
 function buildFullName(firstName, lastName) {
   return [firstName, lastName].map((part) => String(part || "").trim()).filter(Boolean).join(" ");
 }
 
 function isLockedStatus(status) {
-  return status === "inactive" || status === "suspended";
+  return status === "inactive" || status === "suspended" || status === "rejected";
 }
 
 function isPortalReady(user) {
@@ -517,11 +557,18 @@ async function listMembers() {
         phone,
         city,
         state,
+        registration_statement,
+        identity_document_name,
+        identity_document_type,
+        identity_document_size,
+        identity_document_data_url,
         role,
         membership_status,
         password_must_change,
         policy_accepted_at,
         approved_at,
+        rejected_at,
+        rejection_reason,
         created_at
       FROM users
       ORDER BY created_at DESC
@@ -538,11 +585,20 @@ async function listMembers() {
     phone: row.phone || "",
     city: row.city || "",
     state: row.state || "",
+    registrationStatement: row.registration_statement || "",
+    identityDocument: {
+      name: row.identity_document_name || "",
+      type: row.identity_document_type || "",
+      size: Number(row.identity_document_size || 0),
+      dataUrl: row.identity_document_data_url || ""
+    },
     role: row.role,
     membershipStatus: row.membership_status,
     passwordMustChange: row.password_must_change,
     policyAcceptedAt: row.policy_accepted_at,
     approvedAt: row.approved_at,
+    rejectedAt: row.rejected_at,
+    rejectionReason: row.rejection_reason || "",
     createdAt: row.created_at
   }));
 }
@@ -553,13 +609,19 @@ async function handleApi(req, res, url) {
 
   if (method === "POST" && pathname === "/api/auth/register") {
     const payload = await readJson(req);
-    requireFields(payload, ["email", "firstName", "lastName"]);
+    requireFields(payload, ["email", "firstName", "lastName", "registrationStatement"]);
 
     const email = normalizeEmail(payload.email);
     const firstName = String(payload.firstName).trim();
     const lastName = String(payload.lastName).trim();
     const fullName = buildFullName(firstName, lastName);
+    const registrationStatement = String(payload.registrationStatement).trim();
+    const identityDocument = validateIdentityDocument(payload.identityDocument);
     const passwordHash = await hashPassword(createSessionToken());
+
+    if (registrationStatement.length < 40) {
+      return sendError(res, 400, "Tell us more about who you are and why you want to join. Please enter at least 40 characters.");
+    }
 
     try {
       const { rows } = await query(
@@ -570,25 +632,41 @@ async function handleApi(req, res, url) {
             first_name,
             last_name,
             full_name,
+            registration_statement,
+            identity_document_name,
+            identity_document_type,
+            identity_document_size,
+            identity_document_data_url,
             role,
             membership_status,
             password_must_change
           )
-          VALUES ($1, $2, $3, $4, $5, 'member', 'pending_approval', TRUE)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'member', 'pending_approval', TRUE)
           RETURNING *
         `,
-        [email, passwordHash, firstName, lastName, fullName]
+        [
+          email,
+          passwordHash,
+          firstName,
+          lastName,
+          fullName,
+          registrationStatement,
+          identityDocument.name,
+          identityDocument.type,
+          identityDocument.size,
+          identityDocument.dataUrl
+        ]
       );
 
       await notifyAdmins(
         "account_request",
         "New member registration request",
-        `${fullName} (${email}) is waiting for account approval and a temporary password.`,
+        `${fullName} (${email}) submitted an application and ID card for validation.`,
         "/admin"
       );
 
       return sendJson(res, 201, {
-        message: "Registration submitted. An admin will review your account and provide a temporary password after approval.",
+        message: "Registration submitted. An admin will validate your application and ID card before approval.",
         user: toUser(rows[0])
       });
     } catch (error) {
@@ -612,6 +690,11 @@ async function handleApi(req, res, url) {
 
     if (user.membership_status === "pending_approval") {
       return sendError(res, 403, "Your account request is waiting for admin approval.");
+    }
+
+    if (user.membership_status === "rejected") {
+      const reason = user.rejection_reason ? ` Reason: ${user.rejection_reason}` : "";
+      return sendError(res, 403, `Your account request was rejected.${reason}`);
     }
 
     if (isLockedStatus(user.membership_status)) {
@@ -1186,6 +1269,7 @@ async function handleApi(req, res, url) {
         WHERE id = $1
           AND role = 'member'
           AND membership_status = 'pending_approval'
+          AND COALESCE(identity_document_data_url, '') <> ''
         RETURNING *
       `,
       [memberId, passwordHash, admin.id]
@@ -1202,6 +1286,40 @@ async function handleApi(req, res, url) {
       "Your 237 Ville account was approved. Use the temporary password provided by the admin, then update your password and complete onboarding.",
       "/"
     );
+
+    return sendJson(res, 200, { member: toUser(rows[0]) });
+  }
+
+  const memberRejectMatch = pathname.match(/^\/api\/admin\/members\/(\d+)\/reject$/);
+  if (method === "POST" && memberRejectMatch) {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    const memberId = parseId(memberRejectMatch[1]);
+    const payload = await readJson(req);
+    requireFields(payload, ["reason"]);
+    const reason = String(payload.reason).trim();
+
+    const { rows } = await query(
+      `
+        UPDATE users
+        SET membership_status = 'rejected',
+            rejection_reason = $2,
+            rejected_at = now(),
+            rejected_by = $3,
+            updated_at = now()
+        WHERE id = $1
+          AND role = 'member'
+          AND membership_status = 'pending_approval'
+        RETURNING *
+      `,
+      [memberId, reason, admin.id]
+    );
+
+    if (rows.length === 0) {
+      return sendError(res, 404, "Pending member request not found.");
+    }
+
+    await query("DELETE FROM sessions WHERE user_id = $1", [memberId]);
 
     return sendJson(res, 200, { member: toUser(rows[0]) });
   }
@@ -1280,6 +1398,28 @@ async function handleApi(req, res, url) {
       [parseId(notificationMatch[1]), user.id]
     );
     return sendJson(res, 200, { ok: true });
+  }
+
+  if (method === "POST" && pathname === "/api/admin/notifications/clear-old") {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    const payload = await readJson(req);
+    const days = Number(payload.days || 30);
+
+    if (!Number.isInteger(days) || days < 1 || days > 365) {
+      return sendError(res, 400, "Days must be a whole number between 1 and 365.");
+    }
+
+    const { rowCount } = await query(
+      `
+        DELETE FROM notifications
+        WHERE user_id = $1
+          AND created_at < now() - ($2 || ' days')::interval
+      `,
+      [admin.id, days]
+    );
+
+    return sendJson(res, 200, { deletedCount: rowCount });
   }
 
   if (method === "GET" && pathname === "/api/admin/summary") {

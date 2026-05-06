@@ -10,8 +10,13 @@ CREATE TABLE IF NOT EXISTS users (
   city TEXT DEFAULT '',
   state TEXT DEFAULT '',
   bio TEXT DEFAULT '',
+  registration_statement TEXT DEFAULT '',
+  identity_document_name TEXT DEFAULT '',
+  identity_document_type TEXT DEFAULT '',
+  identity_document_size INTEGER DEFAULT 0,
+  identity_document_data_url TEXT DEFAULT '',
   role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('member', 'admin')),
-  membership_status TEXT NOT NULL DEFAULT 'pending_approval' CHECK (membership_status IN ('pending_approval', 'pending_policy', 'pending_fee', 'active', 'inactive', 'suspended')),
+  membership_status TEXT NOT NULL DEFAULT 'pending_approval' CHECK (membership_status IN ('pending_approval', 'pending_policy', 'pending_fee', 'active', 'inactive', 'suspended', 'rejected')),
   notification_opt_in BOOLEAN NOT NULL DEFAULT TRUE,
   password_must_change BOOLEAN NOT NULL DEFAULT FALSE,
   policy_accepted_at TIMESTAMPTZ,
@@ -19,21 +24,32 @@ CREATE TABLE IF NOT EXISTS users (
   policy_version TEXT DEFAULT '',
   approved_at TIMESTAMPTZ,
   approved_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  rejected_at TIMESTAMPTZ,
+  rejected_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  rejection_reason TEXT DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS first_name TEXT NOT NULL DEFAULT '';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS last_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS registration_statement TEXT DEFAULT '';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS identity_document_name TEXT DEFAULT '';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS identity_document_type TEXT DEFAULT '';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS identity_document_size INTEGER DEFAULT 0;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS identity_document_data_url TEXT DEFAULT '';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS password_must_change BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS policy_accepted_at TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS policy_signature_name TEXT DEFAULT '';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS policy_version TEXT DEFAULT '';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS approved_by BIGINT REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS rejected_at TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS rejected_by BIGINT REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS rejection_reason TEXT DEFAULT '';
 ALTER TABLE users ALTER COLUMN membership_status SET DEFAULT 'pending_approval';
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_membership_status_check;
-ALTER TABLE users ADD CONSTRAINT users_membership_status_check CHECK (membership_status IN ('pending_approval', 'pending_policy', 'pending_fee', 'active', 'inactive', 'suspended'));
+ALTER TABLE users ADD CONSTRAINT users_membership_status_check CHECK (membership_status IN ('pending_approval', 'pending_policy', 'pending_fee', 'active', 'inactive', 'suspended', 'rejected'));
 UPDATE users
 SET
   first_name = CASE WHEN first_name = '' THEN split_part(full_name, ' ', 1) ELSE first_name END,

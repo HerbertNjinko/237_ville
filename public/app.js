@@ -52,6 +52,29 @@ function formatMoney(cents = 0) {
   }).format(Number(cents || 0) / 100);
 }
 
+function formatBytes(bytes = 0) {
+  const value = Number(bytes || 0);
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => resolve(reader.result));
+    reader.addEventListener("error", () => reject(new Error("Unable to read ID card file.")));
+    reader.readAsDataURL(file);
+  });
+}
+
+function generateTemporaryPassword() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%";
+  const bytes = new Uint32Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (value) => alphabet[value % alphabet.length]).join("");
+}
+
 function statusPill(status) {
   return `<span class="status-pill ${escapeHtml(status)}">${escapeHtml(status)}</span>`;
 }
@@ -176,6 +199,19 @@ function renderAuth() {
               <span>Email</span>
               <input name="email" type="email" autocomplete="email" required>
             </label>
+            ${
+              isRegister
+                ? `<label class="field">
+                    <span>Who you are and why you want to join</span>
+                    <textarea name="registrationStatement" minlength="40" required></textarea>
+                  </label>
+                  <label class="field">
+                    <span>ID card for verification</span>
+                    <input name="identityDocument" type="file" accept="image/png,image/jpeg,image/webp,application/pdf" required>
+                  </label>
+                  <p class="muted">Accepted files: JPG, PNG, WebP, or PDF up to 3 MB.</p>`
+                : ""
+            }
             ${
               isRegister
                 ? ""
@@ -902,6 +938,21 @@ function renderAdmin() {
         </div>
         ${renderPendingApprovals(pendingApprovals)}
       </div>
+      <div class="panel">
+        <div class="panel-header">
+          <div>
+            <h3>Notification cleanup</h3>
+            <p>Remove old admin notifications from your account.</p>
+          </div>
+        </div>
+        <form class="form-stack compact-form" data-action="clear-old-notifications">
+          <label class="field">
+            <span>Delete notifications older than days</span>
+            <input name="days" type="number" min="1" max="365" value="30" required>
+          </label>
+          <button class="danger-button" type="submit">Clear old notifications</button>
+        </form>
+      </div>
       <div class="two-column">
         <div class="panel">
           <div class="panel-header">
@@ -1098,12 +1149,33 @@ function renderPendingApprovals(members) {
                 </div>
                 ${statusPill(member.membershipStatus)}
               </div>
+              <div class="application-detail">
+                <strong>Application statement</strong>
+                <p>${escapeHtml(member.registrationStatement || "No application statement provided.")}</p>
+                ${
+                  member.identityDocument?.dataUrl
+                    ? `<a class="document-link" href="${escapeHtml(member.identityDocument.dataUrl)}" target="_blank" rel="noopener" download="${escapeHtml(member.identityDocument.name)}">
+                        Review ID card (${escapeHtml(member.identityDocument.name)}, ${formatBytes(member.identityDocument.size)})
+                      </a>`
+                    : `<span class="muted">No ID card uploaded.</span>`
+                }
+              </div>
               <form class="form-stack" data-action="approve-member" data-member-id="${member.id}">
                 <label class="field">
                   <span>Temporary password</span>
                   <input name="temporaryPassword" type="text" minlength="8" required>
                 </label>
-                <button class="primary-button" type="submit">Approve account</button>
+                <div class="actions">
+                  <button class="ghost-button" data-click="generate-temp-password" type="button">Generate password</button>
+                  <button class="primary-button" type="submit">Approve account</button>
+                </div>
+              </form>
+              <form class="form-stack rejection-form" data-action="reject-member" data-member-id="${member.id}">
+                <label class="field">
+                  <span>Rejection reason</span>
+                  <textarea name="reason" required></textarea>
+                </label>
+                <button class="danger-button" type="submit">Reject account</button>
               </form>
             </article>
           `
@@ -1225,6 +1297,28 @@ async function handleSubmit(event) {
     }
 
     if (action === "register") {
+      const file = form.elements.identityDocument?.files?.[0];
+
+      if (!file) {
+        throw new Error("ID card upload is required.");
+      }
+
+      if (file.size > 3_000_000) {
+        throw new Error("ID card file must be 3 MB or smaller.");
+      }
+
+      const acceptedTypes = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
+      if (!acceptedTypes.includes(file.type)) {
+        throw new Error("ID card must be a JPG, PNG, WebP, or PDF file.");
+      }
+
+      payload.identityDocument = {
+        name: file.name,
+        type: file.type,
+        size: file.size,
+        dataUrl: await fileToDataUrl(file)
+      };
+
       const result = await api("/api/auth/register", {
         method: "POST",
         body: JSON.stringify(payload)
@@ -1377,6 +1471,29 @@ async function handleSubmit(event) {
       state.message = "Member approved. Provide the temporary password to the member.";
       state.messageType = "ok";
       await refreshAll({ includeAdmin: true });
+      return;
+    }
+
+    if (action === "reject-member") {
+      await api(`/api/admin/members/${form.dataset.memberId}/reject`, {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      form.reset();
+      state.message = "Member registration rejected.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
+    if (action === "clear-old-notifications") {
+      const result = await api("/api/admin/notifications/clear-old", {
+        method: "POST",
+        body: JSON.stringify({ days: Number(payload.days) })
+      });
+      state.message = `${result.deletedCount} old notification${result.deletedCount === 1 ? "" : "s"} cleared.`;
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
     }
   } catch (error) {
     state.message = error.message;
@@ -1424,6 +1541,17 @@ async function handleClick(event) {
 
     if (action === "refresh") {
       await refreshAll({ includeAdmin: state.view === "admin" });
+      return;
+    }
+
+    if (action === "generate-temp-password") {
+      const form = button.closest("form");
+      const input = form?.elements.temporaryPassword;
+      if (input) {
+        input.value = generateTemporaryPassword();
+        input.focus();
+        input.select();
+      }
       return;
     }
 
