@@ -368,9 +368,10 @@ CREATE TABLE IF NOT EXISTS social_assignments (
   group_name TEXT NOT NULL DEFAULT 'general',
   title TEXT NOT NULL,
   note TEXT DEFAULT '',
-  status TEXT NOT NULL DEFAULT 'assigned' CHECK (status IN ('assigned', 'completed', 'cancelled')),
+  status TEXT NOT NULL DEFAULT 'assigned' CHECK (status IN ('assigned', 'completed', 'cancelled', 'archived')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  archived_at TIMESTAMPTZ
 );
 
 ALTER TABLE social_assignments ADD COLUMN IF NOT EXISTS group_name TEXT NOT NULL DEFAULT 'general';
@@ -382,10 +383,11 @@ ALTER TABLE social_assignments ADD COLUMN IF NOT EXISTS drink_is_alcoholic BOOLE
 ALTER TABLE social_assignments ADD COLUMN IF NOT EXISTS drink_brand TEXT DEFAULT '';
 ALTER TABLE social_assignments ADD COLUMN IF NOT EXISTS response_note TEXT DEFAULT '';
 ALTER TABLE social_assignments ADD COLUMN IF NOT EXISTS responded_at TIMESTAMPTZ;
+ALTER TABLE social_assignments ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
 ALTER TABLE social_assignments DROP CONSTRAINT IF EXISTS social_assignments_task_type_check;
 ALTER TABLE social_assignments ADD CONSTRAINT social_assignments_task_type_check CHECK (task_type IN ('food', 'drinks', 'host', 'setup', 'cleanup', 'other'));
 ALTER TABLE social_assignments DROP CONSTRAINT IF EXISTS social_assignments_status_check;
-ALTER TABLE social_assignments ADD CONSTRAINT social_assignments_status_check CHECK (status IN ('assigned', 'completed', 'cancelled'));
+ALTER TABLE social_assignments ADD CONSTRAINT social_assignments_status_check CHECK (status IN ('assigned', 'completed', 'cancelled', 'archived'));
 ALTER TABLE social_assignments DROP CONSTRAINT IF EXISTS social_assignments_drink_bottle_count_check;
 ALTER TABLE social_assignments ADD CONSTRAINT social_assignments_drink_bottle_count_check CHECK (drink_bottle_count >= 0);
 
@@ -434,6 +436,7 @@ CREATE TABLE IF NOT EXISTS social_resource_requests (
   reviewed_at TIMESTAMPTZ,
   delivered_at TIMESTAMPTZ,
   checked_in_at TIMESTAMPTZ,
+  archived_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -447,6 +450,7 @@ ALTER TABLE social_resource_requests ADD COLUMN IF NOT EXISTS reviewed_by BIGINT
 ALTER TABLE social_resource_requests ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
 ALTER TABLE social_resource_requests ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMPTZ;
 ALTER TABLE social_resource_requests ADD COLUMN IF NOT EXISTS checked_in_at TIMESTAMPTZ;
+ALTER TABLE social_resource_requests ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
 ALTER TABLE social_resource_requests DROP CONSTRAINT IF EXISTS social_resource_requests_quantity_check;
 ALTER TABLE social_resource_requests ADD CONSTRAINT social_resource_requests_quantity_check CHECK (quantity > 0);
 ALTER TABLE social_resource_requests DROP CONSTRAINT IF EXISTS social_resource_requests_status_check;
@@ -525,9 +529,11 @@ CREATE INDEX IF NOT EXISTS idx_expenditures_status_date ON expenditures(status, 
 CREATE INDEX IF NOT EXISTS idx_social_meetings_date ON social_meetings(meeting_date DESC);
 CREATE INDEX IF NOT EXISTS idx_social_assignments_meeting ON social_assignments(meeting_id);
 CREATE INDEX IF NOT EXISTS idx_social_assignments_user ON social_assignments(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_social_assignments_archive ON social_assignments(status, archived_at);
 CREATE INDEX IF NOT EXISTS idx_social_resources_status ON social_resources(status, name);
 CREATE INDEX IF NOT EXISTS idx_social_resource_requests_user ON social_resource_requests(requested_by, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_social_resource_requests_status ON social_resource_requests(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_social_resource_requests_archive ON social_resource_requests(requested_by, archived_at);
 CREATE INDEX IF NOT EXISTS idx_social_resource_adjustments_resource ON social_resource_adjustments(resource_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_social_fund_requests_user ON social_fund_requests(requested_by, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_social_fund_requests_status ON social_fund_requests(status, created_at DESC);

@@ -1120,6 +1120,10 @@ function normalizeSocialMeetingStatus(value) {
   return ["draft", "published", "completed", "cancelled"].includes(value) ? value : "draft";
 }
 
+function normalizeSocialAssignmentStatus(value) {
+  return ["assigned", "completed", "cancelled", "archived"].includes(value) ? value : "assigned";
+}
+
 function normalizeResourceStatus(value) {
   return value === "retired" ? "retired" : "active";
 }
@@ -1184,7 +1188,8 @@ function toSocialAssignment(row) {
     responseNote: row.response_note || "",
     respondedAt: row.responded_at,
     createdAt: row.created_at,
-    updatedAt: row.updated_at
+    updatedAt: row.updated_at,
+    archivedAt: row.archived_at
   };
 }
 
@@ -1233,6 +1238,9 @@ function toSocialResourceRequest(row) {
     adminNote: row.admin_note || "",
     reviewedBy: row.reviewed_by ? Number(row.reviewed_by) : null,
     reviewedAt: row.reviewed_at,
+    deliveredAt: row.delivered_at,
+    checkedInAt: row.checked_in_at,
+    archivedAt: row.archived_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -1255,12 +1263,51 @@ function toSocialMeeting(row, assignments = [], resourceRequests = []) {
   };
 }
 
+async function archivePastSocialItems() {
+  await query(
+    `
+      UPDATE social_assignments
+      SET status = 'archived',
+          archived_at = COALESCE(archived_at, now()),
+          updated_at = now()
+      FROM social_meetings
+      WHERE social_assignments.meeting_id = social_meetings.id
+        AND social_meetings.meeting_date < CURRENT_DATE
+        AND social_assignments.status IN ('assigned', 'completed')
+    `
+  );
+
+  await query(
+    `
+      UPDATE social_meetings
+      SET status = 'completed',
+          updated_at = now()
+      WHERE meeting_date < CURRENT_DATE
+        AND status IN ('draft', 'published')
+    `
+  );
+
+  await query(
+    `
+      UPDATE social_resource_requests
+      SET status = 'checked_in',
+          checked_in_at = COALESCE(checked_in_at, updated_at, now()),
+          archived_at = COALESCE(archived_at, checked_in_at, updated_at, now()),
+          updated_at = now()
+      WHERE status IN ('checked_in', 'returned')
+        AND archived_at IS NULL
+    `
+  );
+}
+
 async function listSocialCoordinator(user, { includeAll = false } = {}) {
+  await archivePastSocialItems();
+
   const meetingsResult = await query(
     `
       SELECT *
       FROM social_meetings
-      WHERE ($1::boolean = true OR status IN ('published', 'completed'))
+      WHERE ($1::boolean = true OR (status = 'published' AND meeting_date >= CURRENT_DATE))
       ORDER BY meeting_date DESC
       LIMIT 36
     `,
@@ -1296,11 +1343,19 @@ async function listSocialCoordinator(user, { includeAll = false } = {}) {
       FROM social_assignments
       LEFT JOIN users ON users.id = social_assignments.user_id
       JOIN social_meetings ON social_meetings.id = social_assignments.meeting_id
-      WHERE ($1::boolean = true OR social_meetings.status IN ('published', 'completed') OR social_assignments.user_id = $2)
+      WHERE (
+        $1::boolean = true
+        OR (
+          social_assignments.status <> 'archived'
+          AND social_assignments.archived_at IS NULL
+          AND social_meetings.status = 'published'
+          AND social_meetings.meeting_date >= CURRENT_DATE
+        )
+      )
       ORDER BY social_meetings.meeting_date DESC, social_assignments.task_type ASC, social_assignments.created_at ASC
       LIMIT 500
     `,
-    [Boolean(includeAll), user.id]
+    [Boolean(includeAll)]
   );
   const requestsResult = includeAll
     ? await query(
@@ -1332,6 +1387,7 @@ async function listSocialCoordinator(user, { includeAll = false } = {}) {
           JOIN users ON users.id = social_resource_requests.requested_by
           LEFT JOIN social_meetings ON social_meetings.id = social_resource_requests.meeting_id
           WHERE social_resource_requests.requested_by = $1
+            AND social_resource_requests.archived_at IS NULL
           ORDER BY social_resource_requests.created_at DESC
           LIMIT 100
         `,
@@ -2181,7 +2237,7 @@ async function handleApi(req, res, url) {
     requireFields(payload, ["title"]);
     const taskType = normalizeSocialTaskType(payload.taskType);
     const memberId = payload.userId ? parseId(payload.userId) : null;
-    const status = ["assigned", "completed", "cancelled"].includes(payload.status) ? payload.status : "assigned";
+    const status = normalizeSocialAssignmentStatus(payload.status);
 
     if (memberId) {
       const memberResult = await query(
@@ -2202,6 +2258,7 @@ async function handleApi(req, res, url) {
             title = $5,
             note = $6,
             status = $7,
+            archived_at = CASE WHEN $7 = 'archived' THEN COALESCE(archived_at, now()) ELSE NULL END,
             updated_at = now()
         WHERE id = $1
         RETURNING *
@@ -2257,8 +2314,8 @@ async function handleApi(req, res, url) {
     if (assignment.status !== "assigned") {
       return sendError(res, 400, "Only active assignments can be updated.");
     }
-    if (!["published", "completed"].includes(assignment.meeting_status)) {
-      return sendError(res, 403, "You can only respond after the meeting schedule is published.");
+    if (assignment.meeting_status !== "published" || String(assignment.meeting_date).slice(0, 10) < new Date().toISOString().slice(0, 10)) {
+      return sendError(res, 403, "You can only respond before a published meeting date passes.");
     }
     if (!["food", "drinks"].includes(assignment.task_type)) {
       return sendError(res, 400, "Only food and drinks assignments accept member contribution details.");
@@ -2335,7 +2392,8 @@ async function handleApi(req, res, url) {
       `
         SELECT social_assignments.*,
                social_meetings.title AS meeting_title,
-               social_meetings.status AS meeting_status
+               social_meetings.status AS meeting_status,
+               social_meetings.meeting_date
         FROM social_assignments
         JOIN social_meetings ON social_meetings.id = social_assignments.meeting_id
         WHERE social_assignments.id = $1
@@ -2353,8 +2411,8 @@ async function handleApi(req, res, url) {
     if (assignment.status !== "assigned") {
       return sendError(res, 400, "Only active assignments can request funds.");
     }
-    if (!["published", "completed"].includes(assignment.meeting_status)) {
-      return sendError(res, 403, "You can only request funds after the meeting schedule is published.");
+    if (assignment.meeting_status !== "published" || String(assignment.meeting_date).slice(0, 10) < new Date().toISOString().slice(0, 10)) {
+      return sendError(res, 403, "You can only request funds before a published meeting date passes.");
     }
     if (!["food", "drinks"].includes(assignment.task_type)) {
       return sendError(res, 400, "Only food and drinks assignments can request preparation funds.");
@@ -2648,13 +2706,15 @@ async function handleApi(req, res, url) {
         WHERE social_assignments.meeting_id = $1
           AND social_assignments.user_id = $2
           AND social_assignments.status = 'assigned'
-          AND social_meetings.status IN ('published', 'completed')
+          AND social_assignments.archived_at IS NULL
+          AND social_meetings.status = 'published'
+          AND social_meetings.meeting_date >= CURRENT_DATE
         LIMIT 1
       `,
       [meetingId, user.id]
     );
     if (assignmentResult.rows.length === 0) {
-      return sendError(res, 403, "You can only request resources for a published meeting where you have an assigned task.");
+      return sendError(res, 403, "You can only request resources for an active published meeting where you have an assigned task.");
     }
 
     const { rows } = await query(
@@ -2739,6 +2799,11 @@ async function handleApi(req, res, url) {
               reviewed_at = now(),
               delivered_at = CASE WHEN $2 = 'delivered' THEN COALESCE(delivered_at, now()) ELSE delivered_at END,
               checked_in_at = CASE WHEN $2 = 'checked_in' THEN now() ELSE checked_in_at END,
+              archived_at = CASE
+                WHEN $2 = 'checked_in' THEN COALESCE(archived_at, now())
+                WHEN $2 IN ('pending', 'approved', 'delivered') THEN NULL
+                ELSE archived_at
+              END,
               updated_at = now()
           WHERE id = $1
           RETURNING *

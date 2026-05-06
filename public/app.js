@@ -954,7 +954,7 @@ function renderOverview() {
 }
 
 function renderAnnouncements() {
-  const socialMeetings = state.data.social?.meetings || [];
+  const socialMeetings = (state.data.social?.meetings || []).filter(isActiveSocialMeeting);
 
   return `
     <section class="content-grid">
@@ -2233,6 +2233,23 @@ function currentMonthValue() {
   return new Date().toISOString().slice(0, 7);
 }
 
+function isDateBeforeToday(value) {
+  const dateValue = dateOnlyValue(value);
+  return Boolean(dateValue && dateValue < new Date().toISOString().slice(0, 10));
+}
+
+function isActiveSocialMeeting(meeting) {
+  return meeting.status === "published" && !isDateBeforeToday(meeting.meetingDate);
+}
+
+function isActiveSocialAssignment(assignment) {
+  return assignment.status === "assigned" && !assignment.archivedAt && !isDateBeforeToday(assignment.meeting?.meetingDate || assignment.meetingDate);
+}
+
+function isActiveMemberResourceRequest(request) {
+  return request.status !== "checked_in" && !request.archivedAt;
+}
+
 function socialTaskLabel(taskType) {
   const labels = {
     food: "Food team",
@@ -2268,7 +2285,7 @@ function activeMemberOptions(selectedId = "") {
 }
 
 function socialMeetingOptions(meetings = [], selectedId = "") {
-  const openMeetings = meetings.filter((meeting) => !["completed", "cancelled"].includes(meeting.status));
+  const openMeetings = meetings.filter((meeting) => !["completed", "cancelled"].includes(meeting.status) && !isDateBeforeToday(meeting.meetingDate));
   return `
     <option value="">Choose monthly meeting</option>
     ${openMeetings
@@ -2395,6 +2412,9 @@ function renderAdminSocialMeetingsSection(meetings) {
 }
 
 function renderAdminSocialAssignmentsSection(social, assignments) {
+  const activeAssignments = assignments.filter((assignment) => assignment.status !== "archived");
+  const archivedAssignments = assignments.filter((assignment) => assignment.status === "archived");
+
   return `
     <section class="two-column">
       <div class="panel">
@@ -2404,7 +2424,16 @@ function renderAdminSocialAssignmentsSection(social, assignments) {
             <p>Manage food, drinks, hosting, setup, and cleanup tasks across monthly meetings.</p>
           </div>
         </div>
-        ${renderSocialAssignmentList(assignments)}
+        ${renderSocialAssignmentList(activeAssignments, "No active assignments yet.")}
+        <div class="social-subsection">
+          <div class="panel-header">
+            <div>
+              <h3>Archived assignments</h3>
+              <p>Assignments are archived automatically after the meeting date passes.</p>
+            </div>
+          </div>
+          ${renderSocialAssignmentList(archivedAssignments, "No archived assignments yet.")}
+        </div>
       </div>
       <aside class="panel">
         <div class="panel-header">
@@ -2624,8 +2653,8 @@ function renderAdminSocialMeetingCard(meeting) {
   `;
 }
 
-function renderSocialAssignmentList(assignments) {
-  if (!assignments.length) return emptyState("No assignments yet.");
+function renderSocialAssignmentList(assignments, emptyText = "No assignments yet.") {
+  if (!assignments.length) return emptyState(emptyText);
 
   return `
     <div class="item-list compact-list">
@@ -2659,7 +2688,7 @@ function renderSocialAssignmentList(assignments) {
                 </label>
                 <label class="field">
                   <span>Status</span>
-                  <select name="status">${socialStatusOptions(["assigned", "completed", "cancelled"], assignment.status)}</select>
+                  <select name="status">${socialStatusOptions(["assigned", "completed", "cancelled", "archived"], assignment.status)}</select>
                 </label>
               </div>
               <label class="field">
@@ -3017,13 +3046,13 @@ function renderSocialCoordinator() {
     (meeting.assignments || [])
       .filter((assignment) => Number(assignment.userId) === Number(state.user.id))
       .map((assignment) => ({ ...assignment, meeting }))
-  );
+  ).filter(isActiveSocialAssignment);
+  const activeResourceRequests = (social.resourceRequests || []).filter(isActiveMemberResourceRequest);
   const assignedMeetingIds = new Set(
     myAssignments
-      .filter((assignment) => assignment.status === "assigned")
       .map((assignment) => Number(assignment.meeting.id))
   );
-  const requestableMeetings = meetings.filter((meeting) => assignedMeetingIds.has(Number(meeting.id)));
+  const requestableMeetings = meetings.filter((meeting) => assignedMeetingIds.has(Number(meeting.id)) && isActiveSocialMeeting(meeting));
 
   return `
     <section class="content-grid">
@@ -3054,7 +3083,7 @@ function renderSocialCoordinator() {
                 <p>Review request status and admin notes.</p>
               </div>
             </div>
-            ${renderMemberResourceRequests(social.resourceRequests || [])}
+            ${renderMemberResourceRequests(activeResourceRequests)}
           </div>
         </aside>
       </section>
