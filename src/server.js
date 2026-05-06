@@ -20,7 +20,7 @@ import { bootstrapDefaultAdmin, runSchemaMigration } from "./setup.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const publicDir = join(__dirname, "..", "public");
-const paymentMethods = new Set(["cash", "cash_app", "venmo", "zelle", "paypal", "bank_account"]);
+const paymentMethods = new Set(["cash", "cash_app", "venmo", "zelle", "paypal", "cheque", "bank_account"]);
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -701,7 +701,8 @@ async function listOrganizationPaymentDetails({ includeDisabled = false } = {}) 
           WHEN 'venmo' THEN 3
           WHEN 'zelle' THEN 4
           WHEN 'paypal' THEN 5
-          ELSE 6
+          WHEN 'cheque' THEN 6
+          ELSE 7
         END
     `,
     [Boolean(includeDisabled)]

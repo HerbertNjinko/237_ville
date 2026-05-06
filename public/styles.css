@@ -416,6 +416,14 @@ a {
   background: #fbfcfd;
 }
 
+.payment-guide[hidden] {
+  display: none;
+}
+
+.payment-method-fields[hidden] {
+  display: none;
+}
+
 .payment-guide span,
 .payment-guide p {
   margin: 0;

@@ -190,7 +190,7 @@ ALTER TABLE payments DROP CONSTRAINT IF EXISTS payments_purpose_check;
 ALTER TABLE payments ADD CONSTRAINT payments_purpose_check CHECK (purpose IN ('dues', 'donation', 'registration_fee'));
 
 CREATE TABLE IF NOT EXISTS organization_payment_details (
-  method TEXT PRIMARY KEY CHECK (method IN ('cash', 'cash_app', 'venmo', 'zelle', 'paypal', 'bank_account')),
+  method TEXT PRIMARY KEY CHECK (method IN ('cash', 'cash_app', 'venmo', 'zelle', 'paypal', 'cheque', 'bank_account')),
   display_name TEXT NOT NULL,
   account_identifier TEXT DEFAULT '',
   instructions TEXT DEFAULT '',
@@ -205,7 +205,7 @@ ALTER TABLE organization_payment_details ADD COLUMN IF NOT EXISTS instructions T
 ALTER TABLE organization_payment_details ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT TRUE;
 ALTER TABLE organization_payment_details ADD COLUMN IF NOT EXISTS updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL;
 ALTER TABLE organization_payment_details DROP CONSTRAINT IF EXISTS organization_payment_details_method_check;
-ALTER TABLE organization_payment_details ADD CONSTRAINT organization_payment_details_method_check CHECK (method IN ('cash', 'cash_app', 'venmo', 'zelle', 'paypal', 'bank_account'));
+ALTER TABLE organization_payment_details ADD CONSTRAINT organization_payment_details_method_check CHECK (method IN ('cash', 'cash_app', 'venmo', 'zelle', 'paypal', 'cheque', 'bank_account'));
 
 INSERT INTO organization_payment_details (method, display_name, account_identifier, instructions, enabled)
 VALUES
@@ -214,8 +214,19 @@ VALUES
   ('venmo', 'Venmo', '', '', TRUE),
   ('zelle', 'Zelle', '', '', TRUE),
   ('paypal', 'PayPal', '', '', TRUE),
-  ('bank_account', 'Bank account / ACH review', '', '', TRUE)
+  ('cheque', 'Cheque', '', 'Make cheques payable to 237 Ville and enter the cheque number or reference below.', TRUE),
+  ('bank_account', 'Bank account', '', 'Pay directly to the 237 Ville bank account using the account details configured here. Enter your bank details below for admin review.', TRUE)
 ON CONFLICT (method) DO NOTHING;
+
+UPDATE organization_payment_details
+SET display_name = 'Bank account',
+    instructions = CASE
+      WHEN COALESCE(instructions, '') = '' THEN 'Pay directly to the 237 Ville bank account using the account details configured here. Enter your bank details below for admin review.'
+      ELSE instructions
+    END,
+    updated_at = now()
+WHERE method = 'bank_account'
+  AND display_name = 'Bank account / ACH review';
 
 CREATE TABLE IF NOT EXISTS expenditures (
   id BIGSERIAL PRIMARY KEY,

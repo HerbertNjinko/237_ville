@@ -91,7 +91,8 @@ const defaultPaymentDetails = [
   { method: "venmo", displayName: "Venmo", accountIdentifier: "", instructions: "", enabled: true },
   { method: "zelle", displayName: "Zelle", accountIdentifier: "", instructions: "", enabled: true },
   { method: "paypal", displayName: "PayPal", accountIdentifier: "", instructions: "", enabled: true },
-  { method: "bank_account", displayName: "Bank account / ACH review", accountIdentifier: "", instructions: "", enabled: true }
+  { method: "cheque", displayName: "Cheque", accountIdentifier: "", instructions: "Make cheques payable to 237 Ville and enter the cheque number or reference below.", enabled: true },
+  { method: "bank_account", displayName: "Bank account", accountIdentifier: "", instructions: "Pay directly to the 237 Ville bank account using the account details configured here. Enter your bank details below for admin review.", enabled: true }
 ];
 
 function availablePaymentDetails() {
@@ -294,18 +295,23 @@ function renderPaymentGuides(details = availablePaymentDetails()) {
 }
 
 function renderPaymentRecordFields({ includeBank = true } = {}) {
+  const selectedMethod = availablePaymentDetails()[0]?.method || "";
+  const visibleFor = (methods) => (methods.includes(selectedMethod) ? "" : "hidden");
+
   return `
-    <label class="field">
-      <span>Payment reference or sender handle</span>
-      <input name="paymentReference">
-    </label>
-    <label class="field">
-      <span>Sender username or payment email</span>
-      <input name="payerHandle">
-    </label>
+    <div class="payment-method-fields" data-payment-fields="cash_app venmo zelle paypal cheque" ${visibleFor(["cash_app", "venmo", "zelle", "paypal", "cheque"])}>
+      <label class="field">
+        <span>Payment reference or cheque number</span>
+        <input name="paymentReference">
+      </label>
+      <label class="field">
+        <span>Sender username or payment email</span>
+        <input name="payerHandle">
+      </label>
+    </div>
     ${
       includeBank
-        ? `<div class="form-grid">
+        ? `<div class="form-grid payment-method-fields" data-payment-fields="bank_account" ${visibleFor(["bank_account"])}>
             <label class="field">
               <span>Bank name</span>
               <input name="bankName">
@@ -329,7 +335,7 @@ function renderPaymentRecordFields({ includeBank = true } = {}) {
           </div>`
         : ""
     }
-    <div class="form-grid">
+    <div class="form-grid payment-method-fields" data-payment-fields="cash" ${visibleFor(["cash"])}>
       <label class="field">
         <span>Cash donor name</span>
         <input name="cashDonorName">
@@ -2940,10 +2946,19 @@ async function handleClick(event) {
 function updatePaymentGuideVisibility(select) {
   const form = select.closest("form");
   const guideList = form?.querySelector("[data-payment-guide-list]");
-  if (!guideList) return;
+  if (guideList) {
+    for (const guide of guideList.querySelectorAll("[data-payment-guide]")) {
+      guide.hidden = guide.dataset.paymentGuide !== select.value;
+    }
+  }
 
-  for (const guide of guideList.querySelectorAll("[data-payment-guide]")) {
-    guide.hidden = guide.dataset.paymentGuide !== select.value;
+  for (const fieldGroup of form?.querySelectorAll("[data-payment-fields]") || []) {
+    const methods = (fieldGroup.dataset.paymentFields || "").split(/\s+/);
+    const isHidden = !methods.includes(select.value);
+    fieldGroup.hidden = isHidden;
+    for (const field of fieldGroup.querySelectorAll("input, select, textarea")) {
+      field.disabled = isHidden;
+    }
   }
 }
 
