@@ -448,6 +448,36 @@ ALTER TABLE social_resource_requests ADD CONSTRAINT social_resource_requests_qua
 ALTER TABLE social_resource_requests DROP CONSTRAINT IF EXISTS social_resource_requests_status_check;
 ALTER TABLE social_resource_requests ADD CONSTRAINT social_resource_requests_status_check CHECK (status IN ('pending', 'approved', 'declined', 'returned'));
 
+CREATE TABLE IF NOT EXISTS social_fund_requests (
+  id BIGSERIAL PRIMARY KEY,
+  meeting_id BIGINT REFERENCES social_meetings(id) ON DELETE SET NULL,
+  assignment_id BIGINT REFERENCES social_assignments(id) ON DELETE CASCADE,
+  requested_by BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  item_description TEXT NOT NULL,
+  amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+  reason TEXT DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+  admin_note TEXT DEFAULT '',
+  reviewed_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  reviewed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE social_fund_requests ADD COLUMN IF NOT EXISTS meeting_id BIGINT REFERENCES social_meetings(id) ON DELETE SET NULL;
+ALTER TABLE social_fund_requests ADD COLUMN IF NOT EXISTS assignment_id BIGINT REFERENCES social_assignments(id) ON DELETE CASCADE;
+ALTER TABLE social_fund_requests ADD COLUMN IF NOT EXISTS item_description TEXT NOT NULL DEFAULT '';
+ALTER TABLE social_fund_requests ADD COLUMN IF NOT EXISTS amount_cents INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE social_fund_requests ADD COLUMN IF NOT EXISTS reason TEXT DEFAULT '';
+ALTER TABLE social_fund_requests ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';
+ALTER TABLE social_fund_requests ADD COLUMN IF NOT EXISTS admin_note TEXT DEFAULT '';
+ALTER TABLE social_fund_requests ADD COLUMN IF NOT EXISTS reviewed_by BIGINT REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE social_fund_requests ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
+ALTER TABLE social_fund_requests DROP CONSTRAINT IF EXISTS social_fund_requests_amount_cents_check;
+ALTER TABLE social_fund_requests ADD CONSTRAINT social_fund_requests_amount_cents_check CHECK (amount_cents > 0);
+ALTER TABLE social_fund_requests DROP CONSTRAINT IF EXISTS social_fund_requests_status_check;
+ALTER TABLE social_fund_requests ADD CONSTRAINT social_fund_requests_status_check CHECK (status IN ('pending', 'approved', 'rejected'));
+
 CREATE TABLE IF NOT EXISTS notifications (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -477,5 +507,8 @@ CREATE INDEX IF NOT EXISTS idx_social_assignments_user ON social_assignments(use
 CREATE INDEX IF NOT EXISTS idx_social_resources_status ON social_resources(status, name);
 CREATE INDEX IF NOT EXISTS idx_social_resource_requests_user ON social_resource_requests(requested_by, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_social_resource_requests_status ON social_resource_requests(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_social_fund_requests_user ON social_fund_requests(requested_by, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_social_fund_requests_status ON social_fund_requests(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_social_fund_requests_assignment ON social_fund_requests(assignment_id, status);
 CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_users_membership_status ON users(membership_status);

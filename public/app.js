@@ -2294,9 +2294,10 @@ function renderAdminSocialCoordinator() {
   const loading = requireAdminData("Loading social coordinator...");
   if (loading) return loading;
 
-  const social = state.admin.social || { meetings: [], resources: [], resourceRequests: [] };
+  const social = state.admin.social || { meetings: [], resources: [], resourceRequests: [], fundRequests: [] };
   const assignments = flattenSocialAssignments(social.meetings || []);
   const pendingRequests = (social.resourceRequests || []).filter((request) => request.status === "pending");
+  const pendingFundRequests = (social.fundRequests || []).filter((request) => request.status === "pending");
   const currentMeetings = (social.meetings || []).filter((meeting) => meeting.status !== "completed" && meeting.status !== "cancelled");
   const checkedOutResources = (social.resources || []).reduce(
     (total, resource) => total + Math.max(0, Number(resource.totalQuantity || 0) - Number(resource.availableQuantity || 0)),
@@ -2310,6 +2311,7 @@ function renderAdminSocialCoordinator() {
         <div class="metric"><span>Open meetings</span><strong>${currentMeetings.length}</strong></div>
         <div class="metric"><span>Assignments</span><strong>${assignments.length}</strong></div>
         <div class="metric"><span>Pending requests</span><strong>${pendingRequests.length}</strong></div>
+        <div class="metric"><span>Pending funds</span><strong>${pendingFundRequests.length}</strong></div>
         <div class="metric"><span>Resources</span><strong>${(social.resources || []).length}</strong></div>
         <div class="metric"><span>Checked out</span><strong>${checkedOutResources}</strong></div>
       </div>
@@ -2323,6 +2325,7 @@ function renderAdminSocialTabs() {
   const tabs = [
     ["meetings", "Monthly meetings"],
     ["assignments", "Assignments"],
+    ["funds", "Fund requests"],
     ["resources", "Resources"],
     ["requests", "Resource requests"]
   ];
@@ -2346,6 +2349,8 @@ function renderAdminSocialSection(social, assignments) {
   switch (state.adminSocialSection) {
     case "assignments":
       return renderAdminSocialAssignmentsSection(social, assignments);
+    case "funds":
+      return renderAdminSocialFundRequestsSection(social.fundRequests || []);
     case "resources":
       return renderAdminSocialResourcesSection(social.resources || []);
     case "requests":
@@ -2425,6 +2430,34 @@ function renderAdminSocialResourcesSection(resources) {
           </div>
         </div>
         ${renderSocialResourceCreateForm()}
+      </aside>
+    </section>
+  `;
+}
+
+function renderAdminSocialFundRequestsSection(requests) {
+  const pending = requests.filter((request) => request.status === "pending");
+  const reviewed = requests.filter((request) => request.status !== "pending");
+
+  return `
+    <section class="two-column">
+      <div class="panel">
+        <div class="panel-header">
+          <div>
+            <h3>Pending fund requests</h3>
+            <p>Review funds requested for expensive dishes or drinks.</p>
+          </div>
+        </div>
+        ${renderAdminSocialFundRequests(pending)}
+      </div>
+      <aside class="panel">
+        <div class="panel-header">
+          <div>
+            <h3>Fund request history</h3>
+            <p>Approved and rejected requests remain available for audit.</p>
+          </div>
+        </div>
+        ${renderAdminSocialFundRequests(reviewed)}
       </aside>
     </section>
   `;
@@ -2751,6 +2784,47 @@ function renderSocialResourceList(resources) {
   `;
 }
 
+function renderAdminSocialFundRequests(requests) {
+  if (!requests.length) return emptyState("No fund requests yet.");
+
+  return `
+    <div class="item-list">
+      ${requests
+        .map(
+          (request) => `
+            <article class="item-card">
+              <div class="panel-header">
+                <div>
+                  <h4>${escapeHtml(request.itemDescription)}</h4>
+                  <p>${escapeHtml(request.requesterName)} requested ${formatMoney(request.amountCents)}${request.meetingTitle ? ` for ${escapeHtml(request.meetingTitle)}` : ""}</p>
+                </div>
+                ${statusPill(request.status)}
+              </div>
+              <div class="item-meta">
+                ${request.assignmentTitle ? `<span>${escapeHtml(request.assignmentTitle)}</span>` : ""}
+                ${request.taskType ? `<span>${escapeHtml(socialTaskLabel(request.taskType))}</span>` : ""}
+                <span>${formatDate(request.createdAt)}</span>
+              </div>
+              <p>${escapeHtml(request.reason || "")}</p>
+              <form class="form-stack compact-form" data-action="update-social-fund-request" data-request-id="${request.id}">
+                <label class="field">
+                  <span>Status</span>
+                  <select name="status">${socialStatusOptions(["pending", "approved", "rejected"], request.status)}</select>
+                </label>
+                <label class="field">
+                  <span>Admin note</span>
+                  <input name="adminNote" value="${escapeHtml(request.adminNote || "")}">
+                </label>
+                <button class="secondary-button" type="submit">Update fund request</button>
+              </form>
+            </article>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
 function renderAdminSocialResourceRequests(requests) {
   if (!requests.length) return emptyState("No resource requests yet.");
 
@@ -2793,9 +2867,10 @@ function renderAdminSocialResourceRequests(requests) {
 }
 
 function renderSocialCoordinator() {
-  const social = state.data.social || { meetings: [], resources: [], resourceRequests: [] };
+  const social = state.data.social || { meetings: [], resources: [], resourceRequests: [], fundRequests: [] };
   const meetings = social.meetings || [];
   const resources = social.resources || [];
+  const fundRequests = social.fundRequests || [];
   const myAssignments = meetings.flatMap((meeting) =>
     (meeting.assignments || [])
       .filter((assignment) => Number(assignment.userId) === Number(state.user.id))
@@ -2818,7 +2893,7 @@ function renderSocialCoordinator() {
               <p>Tasks assigned to you by the social coordinator.</p>
             </div>
           </div>
-          ${renderMemberSocialAssignments(myAssignments)}
+          ${renderMemberSocialAssignments(myAssignments, fundRequests)}
         </div>
         <aside class="content-grid">
           <div class="panel">
@@ -2922,14 +2997,15 @@ function renderSocialAssignmentResponseDetails(assignment) {
   return `<div class="assignment-response">${details.join("")}</div>`;
 }
 
-function renderMemberSocialAssignments(assignments) {
+function renderMemberSocialAssignments(assignments, fundRequests = []) {
   if (!assignments.length) return emptyState("No social meeting tasks are assigned to you right now.");
 
   return `
     <div class="item-list">
       ${assignments
-        .map(
-          (assignment) => `
+        .map((assignment) => {
+          const assignmentFundRequests = fundRequests.filter((request) => Number(request.assignmentId) === Number(assignment.id));
+          return `
             <article class="item-card">
               <h4>${escapeHtml(assignment.title)}</h4>
               <p>${escapeHtml(assignment.meeting.title)} · ${formatDate(assignment.meeting.meetingDate, { dateOnly: true })}</p>
@@ -2941,7 +3017,58 @@ function renderMemberSocialAssignments(assignments) {
               ${assignment.note ? `<p>${escapeHtml(assignment.note)}</p>` : ""}
               ${renderSocialAssignmentResponseDetails(assignment)}
               ${renderSocialAssignmentResponseForm(assignment)}
+              ${renderSocialFundRequestForm(assignment)}
+              ${renderMemberSocialFundRequests(assignmentFundRequests)}
             </article>
+          `;
+        })
+        .join("")}
+    </div>
+  `;
+}
+
+function renderSocialFundRequestForm(assignment) {
+  if (assignment.status !== "assigned" || !["food", "drinks"].includes(assignment.taskType)) {
+    return "";
+  }
+
+  return `
+    <form class="form-stack compact-form assignment-response-form" data-action="create-social-fund-request" data-assignment-id="${assignment.id}">
+      <h4>Request preparation funds</h4>
+      <label class="field">
+        <span>Dish or drink needing funds</span>
+        <input name="itemDescription" placeholder="Examples: roasted fish, premium drinks" required>
+      </label>
+      <label class="field">
+        <span>Amount requested</span>
+        <input name="amount" type="number" min="1" step="0.01" required>
+      </label>
+      <label class="field">
+        <span>Reason</span>
+        <textarea name="reason" placeholder="Explain why this item needs organization funds." required></textarea>
+      </label>
+      <button class="secondary-button" type="submit">Submit fund request</button>
+    </form>
+  `;
+}
+
+function renderMemberSocialFundRequests(requests) {
+  if (!requests.length) return "";
+
+  return `
+    <div class="comment-list">
+      ${requests
+        .map(
+          (request) => `
+            <div class="comment">
+              <strong>${escapeHtml(request.itemDescription)} · ${formatMoney(request.amountCents)}</strong>
+              <p>${escapeHtml(request.reason || "")}</p>
+              <div class="item-meta">
+                <span>${escapeHtml(request.status)}</span>
+                <span>${formatDate(request.createdAt)}</span>
+              </div>
+              ${request.adminNote ? `<p><strong>Admin note:</strong> ${escapeHtml(request.adminNote)}</p>` : ""}
+            </div>
           `
         )
         .join("")}
@@ -4190,6 +4317,19 @@ async function handleSubmit(event) {
       return;
     }
 
+    if (action === "create-social-fund-request") {
+      payload.assignmentId = Number(form.dataset.assignmentId);
+      await api("/api/social/fund-requests", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      form.reset();
+      state.message = "Fund request submitted.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: state.user.role === "admin" });
+      return;
+    }
+
     if (action === "create-social-resource") {
       await api("/api/admin/social/resources", {
         method: "POST",
@@ -4244,6 +4384,17 @@ async function handleSubmit(event) {
         body: JSON.stringify(payload)
       });
       state.message = "Resource request updated.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
+    if (action === "update-social-fund-request") {
+      await api(`/api/admin/social/fund-requests/${form.dataset.requestId}/status`, {
+        method: "PATCH",
+        body: JSON.stringify(payload)
+      });
+      state.message = "Fund request updated.";
       state.messageType = "ok";
       await refreshAll({ includeAdmin: true });
       return;

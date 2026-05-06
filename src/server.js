@@ -1128,6 +1128,10 @@ function normalizeResourceRequestStatus(value) {
   return ["approved", "declined", "returned"].includes(value) ? value : "pending";
 }
 
+function normalizeFundRequestStatus(value) {
+  return ["approved", "rejected"].includes(value) ? value : "pending";
+}
+
 function toSocialResource(row) {
   return {
     id: Number(row.id),
@@ -1160,6 +1164,30 @@ function toSocialAssignment(row) {
     drinkBrand: row.drink_brand || "",
     responseNote: row.response_note || "",
     respondedAt: row.responded_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function toSocialFundRequest(row) {
+  return {
+    id: Number(row.id),
+    meetingId: row.meeting_id ? Number(row.meeting_id) : null,
+    meetingTitle: row.meeting_title || "",
+    meetingDate: row.meeting_date || null,
+    assignmentId: row.assignment_id ? Number(row.assignment_id) : null,
+    assignmentTitle: row.assignment_title || "",
+    taskType: row.task_type || "",
+    requestedBy: Number(row.requested_by),
+    requesterName: row.requester_name || "",
+    requesterEmail: row.requester_email || "",
+    itemDescription: row.item_description || "",
+    amountCents: Number(row.amount_cents || 0),
+    reason: row.reason || "",
+    status: row.status,
+    adminNote: row.admin_note || "",
+    reviewedBy: row.reviewed_by ? Number(row.reviewed_by) : null,
+    reviewedAt: row.reviewed_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -1274,15 +1302,77 @@ async function listSocialCoordinator(user, { includeAll = false } = {}) {
         `,
         [user.id]
       );
+  const fundRequestsResult = includeAll
+    ? await query(
+        `
+          SELECT social_fund_requests.*,
+                 social_meetings.title AS meeting_title,
+                 social_meetings.meeting_date,
+                 social_assignments.title AS assignment_title,
+                 social_assignments.task_type,
+                 users.full_name AS requester_name,
+                 users.email AS requester_email
+          FROM social_fund_requests
+          JOIN users ON users.id = social_fund_requests.requested_by
+          LEFT JOIN social_meetings ON social_meetings.id = social_fund_requests.meeting_id
+          LEFT JOIN social_assignments ON social_assignments.id = social_fund_requests.assignment_id
+          ORDER BY social_fund_requests.created_at DESC
+          LIMIT 300
+        `
+      )
+    : await query(
+        `
+          SELECT social_fund_requests.*,
+                 social_meetings.title AS meeting_title,
+                 social_meetings.meeting_date,
+                 social_assignments.title AS assignment_title,
+                 social_assignments.task_type,
+                 users.full_name AS requester_name,
+                 users.email AS requester_email
+          FROM social_fund_requests
+          JOIN users ON users.id = social_fund_requests.requested_by
+          LEFT JOIN social_meetings ON social_meetings.id = social_fund_requests.meeting_id
+          LEFT JOIN social_assignments ON social_assignments.id = social_fund_requests.assignment_id
+          WHERE social_fund_requests.requested_by = $1
+          ORDER BY social_fund_requests.created_at DESC
+          LIMIT 100
+        `,
+        [user.id]
+      );
 
   const assignments = assignmentsResult.rows.map(toSocialAssignment);
   const requests = requestsResult.rows.map(toSocialResourceRequest);
+  const fundRequests = fundRequestsResult.rows.map(toSocialFundRequest);
 
   return {
     meetings: meetingsResult.rows.map((row) => toSocialMeeting(row, assignments, requests)),
     resources: resourcesResult.rows.map(toSocialResource),
-    resourceRequests: requests
+    resourceRequests: requests,
+    fundRequests
   };
+}
+
+async function getSocialFundRequest(id) {
+  const { rows } = await query(
+    `
+      SELECT social_fund_requests.*,
+             social_meetings.title AS meeting_title,
+             social_meetings.meeting_date,
+             social_assignments.title AS assignment_title,
+             social_assignments.task_type,
+             users.full_name AS requester_name,
+             users.email AS requester_email
+      FROM social_fund_requests
+      JOIN users ON users.id = social_fund_requests.requested_by
+      LEFT JOIN social_meetings ON social_meetings.id = social_fund_requests.meeting_id
+      LEFT JOIN social_assignments ON social_assignments.id = social_fund_requests.assignment_id
+      WHERE social_fund_requests.id = $1
+      LIMIT 1
+    `,
+    [id]
+  );
+
+  return rows[0] ? toSocialFundRequest(rows[0]) : null;
 }
 
 function socialTaskLabel(taskType) {
@@ -1636,7 +1726,7 @@ async function handleApi(req, res, url) {
         events: [],
         questions: [],
         ballots: [],
-        social: { meetings: [], resources: [], resourceRequests: [] },
+        social: { meetings: [], resources: [], resourceRequests: [], fundRequests: [] },
         financials: { donations: [], expenditures: [], summary: { donationTotalCents: 0, expenditureTotalCents: 0, publishedNetCents: 0 } }
       });
     }
@@ -2179,6 +2269,74 @@ async function handleApi(req, res, url) {
     });
   }
 
+  if (method === "POST" && pathname === "/api/social/fund-requests") {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    if (user.role !== "member") {
+      return sendError(res, 403, "Only member accounts can request social meeting funds.");
+    }
+    const payload = await readJson(req);
+    requireFields(payload, ["assignmentId", "itemDescription", "amount", "reason"]);
+    const assignmentId = parseId(payload.assignmentId);
+    const amountCents = dollarsToCents(payload.amount);
+    const itemDescription = String(payload.itemDescription || "").trim();
+    const reason = String(payload.reason || "").trim();
+
+    if (itemDescription.length < 3) {
+      return sendError(res, 400, "Enter the dish or drink that needs funds.");
+    }
+    if (reason.length < 10) {
+      return sendError(res, 400, "Enter why organization funds are needed.");
+    }
+
+    const assignmentResult = await query(
+      `
+        SELECT social_assignments.*,
+               social_meetings.title AS meeting_title,
+               social_meetings.status AS meeting_status
+        FROM social_assignments
+        JOIN social_meetings ON social_meetings.id = social_assignments.meeting_id
+        WHERE social_assignments.id = $1
+        LIMIT 1
+      `,
+      [assignmentId]
+    );
+    const assignment = assignmentResult.rows[0];
+    if (!assignment) {
+      return sendError(res, 404, "Social assignment not found.");
+    }
+    if (Number(assignment.user_id) !== Number(user.id)) {
+      return sendError(res, 403, "You can only request funds for your own assigned social meeting task.");
+    }
+    if (assignment.status !== "assigned") {
+      return sendError(res, 400, "Only active assignments can request funds.");
+    }
+    if (!["published", "completed"].includes(assignment.meeting_status)) {
+      return sendError(res, 403, "You can only request funds after the meeting schedule is published.");
+    }
+    if (!["food", "drinks"].includes(assignment.task_type)) {
+      return sendError(res, 400, "Only food and drinks assignments can request preparation funds.");
+    }
+
+    const { rows } = await query(
+      `
+        INSERT INTO social_fund_requests (meeting_id, assignment_id, requested_by, item_description, amount_cents, reason)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING id
+      `,
+      [assignment.meeting_id, assignmentId, user.id, itemDescription, amountCents, reason]
+    );
+
+    await notifyAdmins(
+      "social_fund_request",
+      "New social fund request",
+      `${user.fullName} requested $${centsToDollarAmount(amountCents)} for ${itemDescription} for ${assignment.meeting_title}.`,
+      "/admin"
+    );
+
+    return sendJson(res, 201, { fundRequest: await getSocialFundRequest(rows[0].id) });
+  }
+
   const socialPublishMatch = pathname.match(/^\/api\/admin\/social\/meetings\/(\d+)\/publish$/);
   if (method === "POST" && socialPublishMatch) {
     const admin = await requireAdmin(req, res);
@@ -2483,6 +2641,45 @@ async function handleApi(req, res, url) {
     );
 
     return sendJson(res, 200, { request: result.request });
+  }
+
+  const socialFundRequestStatusMatch = pathname.match(/^\/api\/admin\/social\/fund-requests\/(\d+)\/status$/);
+  if (method === "PATCH" && socialFundRequestStatusMatch) {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    const requestId = parseId(socialFundRequestStatusMatch[1]);
+    const payload = await readJson(req);
+    const status = normalizeFundRequestStatus(payload.status);
+    const adminNote = String(payload.adminNote || "").trim();
+
+    const current = await getSocialFundRequest(requestId);
+    if (!current) {
+      return sendError(res, 404, "Fund request not found.");
+    }
+
+    const { rows } = await query(
+      `
+        UPDATE social_fund_requests
+        SET status = $2,
+            admin_note = $3,
+            reviewed_by = CASE WHEN $2::text = 'pending' THEN NULL ELSE $4::bigint END,
+            reviewed_at = CASE WHEN $2::text = 'pending' THEN NULL ELSE now() END,
+            updated_at = now()
+        WHERE id = $1
+        RETURNING id
+      `,
+      [requestId, status, adminNote, admin.id]
+    );
+
+    await createNotification(
+      current.requestedBy,
+      "social_fund_request",
+      "Social fund request updated",
+      `Your fund request for ${current.itemDescription} was marked ${status}.`,
+      "/social"
+    );
+
+    return sendJson(res, 200, { fundRequest: await getSocialFundRequest(rows[0].id) });
   }
 
   if (method === "POST" && pathname === "/api/questions") {
