@@ -1154,6 +1154,12 @@ function toSocialAssignment(row) {
     title: row.title,
     note: row.note || "",
     status: row.status,
+    foodContribution: row.food_contribution || "",
+    drinkBottleCount: Number(row.drink_bottle_count || 0),
+    drinkIsAlcoholic: Boolean(row.drink_is_alcoholic),
+    drinkBrand: row.drink_brand || "",
+    responseNote: row.response_note || "",
+    respondedAt: row.responded_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -1291,13 +1297,48 @@ function socialTaskLabel(taskType) {
   return labels[taskType] || "Other";
 }
 
+function socialAssignmentResponseDetails(assignment) {
+  const taskType = assignment.taskType || assignment.task_type;
+  const foodContribution = String(assignment.foodContribution || assignment.food_contribution || "").trim();
+  const drinkBottleCount = Number(assignment.drinkBottleCount ?? assignment.drink_bottle_count ?? 0);
+  const drinkBrand = String(assignment.drinkBrand || assignment.drink_brand || "").trim();
+  const drinkIsAlcoholic = assignment.drinkIsAlcoholic ?? assignment.drink_is_alcoholic;
+  const responseNote = String(assignment.responseNote || assignment.response_note || "").trim();
+  const details = [];
+
+  if ((taskType === "food" || foodContribution) && foodContribution) {
+    details.push(`Food: ${foodContribution}`);
+  }
+
+  if ((taskType === "drinks" || drinkBottleCount > 0 || drinkBrand) && (drinkBottleCount > 0 || drinkBrand)) {
+    const drinkDetails = [];
+    if (drinkBottleCount > 0) {
+      drinkDetails.push(`${drinkBottleCount} bottle${drinkBottleCount === 1 ? "" : "s"}`);
+    }
+    drinkDetails.push(drinkIsAlcoholic ? "alcoholic" : "non-alcoholic");
+    if (drinkBrand) {
+      drinkDetails.push(drinkBrand);
+    }
+    details.push(`Drinks: ${drinkDetails.join(", ")}`);
+  }
+
+  if (responseNote) {
+    details.push(`Member note: ${responseNote}`);
+  }
+
+  return details.join("; ");
+}
+
 function buildSocialAnnouncementBody(meeting, assignments, requests) {
   const assignmentLines = assignments.length
     ? assignments.map((assignment) => {
-        const group = assignment.group_name ? ` (${assignment.group_name})` : "";
-        const name = assignment.member_name || "Unassigned";
+        const taskType = assignment.taskType || assignment.task_type;
+        const groupName = assignment.groupName || assignment.group_name;
+        const group = groupName ? ` (${groupName})` : "";
+        const name = assignment.memberName || assignment.member_name || "Unassigned";
         const note = assignment.note ? ` - ${assignment.note}` : "";
-        return `- ${socialTaskLabel(assignment.task_type)}${group}: ${name}${note}`;
+        const responseDetails = socialAssignmentResponseDetails(assignment);
+        return `- ${socialTaskLabel(taskType)}${group}: ${name}${note}${responseDetails ? ` | ${responseDetails}` : ""}`;
       })
     : ["- No assignments have been added yet."];
 
@@ -1960,6 +2001,16 @@ async function handleApi(req, res, url) {
       return sendError(res, 404, "Social meeting not found.");
     }
 
+    if (memberId) {
+      const memberResult = await query(
+        "SELECT id FROM users WHERE id = $1 AND role = 'member' AND membership_status = 'active'",
+        [memberId]
+      );
+      if (memberResult.rows.length === 0) {
+        return sendError(res, 400, "Assignments can only be given to active member accounts.");
+      }
+    }
+
     const { rows } = await query(
       `
         INSERT INTO social_assignments (meeting_id, user_id, task_type, group_name, title, note, status)
@@ -2000,6 +2051,16 @@ async function handleApi(req, res, url) {
     const memberId = payload.userId ? parseId(payload.userId) : null;
     const status = ["assigned", "completed", "cancelled"].includes(payload.status) ? payload.status : "assigned";
 
+    if (memberId) {
+      const memberResult = await query(
+        "SELECT id FROM users WHERE id = $1 AND role = 'member' AND membership_status = 'active'",
+        [memberId]
+      );
+      if (memberResult.rows.length === 0) {
+        return sendError(res, 400, "Assignments can only be given to active member accounts.");
+      }
+    }
+
     const { rows } = await query(
       `
         UPDATE social_assignments
@@ -2029,6 +2090,93 @@ async function handleApi(req, res, url) {
     }
 
     return sendJson(res, 200, { assignment: rows[0] });
+  }
+
+  const socialAssignmentResponseMatch = pathname.match(/^\/api\/social\/assignments\/(\d+)\/response$/);
+  if (method === "PATCH" && socialAssignmentResponseMatch) {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    if (user.role !== "member") {
+      return sendError(res, 403, "Only member accounts can respond to social meeting assignments.");
+    }
+
+    const assignmentId = parseId(socialAssignmentResponseMatch[1]);
+    const payload = await readJson(req);
+    const assignmentResult = await query(
+      `
+        SELECT social_assignments.*,
+               social_meetings.title AS meeting_title,
+               social_meetings.meeting_date,
+               social_meetings.status AS meeting_status
+        FROM social_assignments
+        JOIN social_meetings ON social_meetings.id = social_assignments.meeting_id
+        WHERE social_assignments.id = $1
+        LIMIT 1
+      `,
+      [assignmentId]
+    );
+    const assignment = assignmentResult.rows[0];
+    if (!assignment) {
+      return sendError(res, 404, "Social assignment not found.");
+    }
+    if (Number(assignment.user_id) !== Number(user.id)) {
+      return sendError(res, 403, "You can only respond to your assigned social meeting tasks.");
+    }
+    if (assignment.status !== "assigned") {
+      return sendError(res, 400, "Only active assignments can be updated.");
+    }
+    if (!["published", "completed"].includes(assignment.meeting_status)) {
+      return sendError(res, 403, "You can only respond after the meeting schedule is published.");
+    }
+    if (!["food", "drinks"].includes(assignment.task_type)) {
+      return sendError(res, 400, "Only food and drinks assignments accept member contribution details.");
+    }
+
+    const foodContribution = assignment.task_type === "food" ? String(payload.foodContribution || "").trim() : "";
+    const drinkBottleCount =
+      assignment.task_type === "drinks" ? Math.max(0, Math.trunc(Number(payload.drinkBottleCount || 0))) : 0;
+    const drinkBrand = assignment.task_type === "drinks" ? String(payload.drinkBrand || "").trim() : "";
+    const drinkIsAlcoholic =
+      assignment.task_type === "drinks" &&
+      (payload.drinkIsAlcoholic === true ||
+        payload.drinkIsAlcoholic === "true" ||
+        payload.drinkIsAlcoholic === "on" ||
+        payload.drinkIsAlcoholic === "1");
+    const responseNote = String(payload.responseNote || "").trim();
+
+    if (assignment.task_type === "food" && !foodContribution) {
+      return sendError(res, 400, "Enter the food you will bring.");
+    }
+    if (assignment.task_type === "drinks" && (!drinkBottleCount || !drinkBrand)) {
+      return sendError(res, 400, "Enter the drink bottle count and brand.");
+    }
+
+    const { rows } = await query(
+      `
+        UPDATE social_assignments
+        SET food_contribution = $2,
+            drink_bottle_count = $3,
+            drink_is_alcoholic = $4,
+            drink_brand = $5,
+            response_note = $6,
+            responded_at = now(),
+            updated_at = now()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [assignmentId, foodContribution, drinkBottleCount, drinkIsAlcoholic, drinkBrand, responseNote]
+    );
+
+    await notifyAdmins(
+      "social_assignment_response",
+      "Social assignment response submitted",
+      `${user.fullName} updated ${socialTaskLabel(assignment.task_type).toLowerCase()} details for ${assignment.meeting_title}.`,
+      "/admin"
+    );
+
+    return sendJson(res, 200, {
+      assignment: toSocialAssignment({ ...rows[0], member_name: user.fullName, member_email: user.email })
+    });
   }
 
   const socialPublishMatch = pathname.match(/^\/api\/admin\/social\/meetings\/(\d+)\/publish$/);
@@ -2071,7 +2219,7 @@ async function handleApi(req, res, url) {
     );
     const assignments = assignmentsResult.rows.map(toSocialAssignment);
     const resourceRequests = requestsResult.rows.map(toSocialResourceRequest);
-    const body = buildSocialAnnouncementBody(meeting, assignmentsResult.rows, resourceRequests);
+    const body = buildSocialAnnouncementBody(meeting, assignments, resourceRequests);
     const announcementResult = await query(
       `
         INSERT INTO announcements (title, body, category, status, created_by, published_at)
@@ -2174,14 +2322,38 @@ async function handleApi(req, res, url) {
   if (method === "POST" && pathname === "/api/social/resource-requests") {
     const user = await requireActiveUser(req, res);
     if (!user) return;
+    if (user.role !== "member") {
+      return sendError(res, 403, "Only member accounts can request organization resources.");
+    }
     const payload = await readJson(req);
     const resourceId = parseId(payload.resourceId);
     const meetingId = payload.meetingId ? parseId(payload.meetingId) : null;
     const quantity = Math.max(1, Math.trunc(Number(payload.quantity || 1)));
 
+    if (!meetingId) {
+      return sendError(res, 400, "Choose the meeting tied to your assigned task before requesting resources.");
+    }
+
     const resourceResult = await query("SELECT id, name, status FROM social_resources WHERE id = $1 AND status = 'active'", [resourceId]);
     if (resourceResult.rows.length === 0) {
       return sendError(res, 404, "Active resource not found.");
+    }
+
+    const assignmentResult = await query(
+      `
+        SELECT social_assignments.id
+        FROM social_assignments
+        JOIN social_meetings ON social_meetings.id = social_assignments.meeting_id
+        WHERE social_assignments.meeting_id = $1
+          AND social_assignments.user_id = $2
+          AND social_assignments.status = 'assigned'
+          AND social_meetings.status IN ('published', 'completed')
+        LIMIT 1
+      `,
+      [meetingId, user.id]
+    );
+    if (assignmentResult.rows.length === 0) {
+      return sendError(res, 403, "You can only request resources for a published meeting where you have an assigned task.");
     }
 
     const { rows } = await query(

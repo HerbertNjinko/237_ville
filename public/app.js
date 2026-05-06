@@ -41,7 +41,7 @@ const memberViews = [
   ["announcements", "Announcements"],
   ["votes", "Votes"],
   ["events", "Events"],
-  ["social", "Social coordinator"],
+  ["social", "Request resources"],
   ["questions", "Questions"],
   ["financials", "Financials"],
   ["payments", "Dues and donations"],
@@ -823,7 +823,7 @@ function topbarSubtitle() {
     announcements: "Published updates and articles from 237 Ville.",
     votes: "Open and closed issues, elections, and aggregate results.",
     events: "Upcoming community meetings, programs, and planned events.",
-    social: "Monthly meeting assignments and organization resource requests.",
+    social: "Request organization resources for meetings where you have an assigned task.",
     questions: "Member questions approved for community discussion.",
     financials: "Published donations and organization expenditures.",
     payments: "Record dues and donations for admin review.",
@@ -949,15 +949,28 @@ function renderOverview() {
 }
 
 function renderAnnouncements() {
+  const socialMeetings = state.data.social?.meetings || [];
+
   return `
-    <section class="panel">
-      <div class="panel-header">
-        <div>
-          <h3>Announcements and articles</h3>
-          <p>Published by the executive team and organization admins.</p>
+    <section class="content-grid">
+      <div class="panel">
+        <div class="panel-header">
+          <div>
+            <h3>Monthly social meetings</h3>
+            <p>Food, drinks, hosting, and setup assignments for first-Saturday meetings.</p>
+          </div>
         </div>
+        ${renderMemberSocialMeetings(socialMeetings)}
       </div>
-      ${renderAnnouncementList(state.data.announcements || [])}
+      <div class="panel">
+        <div class="panel-header">
+          <div>
+            <h3>Announcements and articles</h3>
+            <p>Published by the executive team and organization admins.</p>
+          </div>
+        </div>
+        ${renderAnnouncementList(state.data.announcements || [])}
+      </div>
     </section>
   `;
 }
@@ -2240,7 +2253,7 @@ function socialStatusOptions(statuses, selected) {
 }
 
 function activeMemberOptions(selectedId = "") {
-  const members = (state.admin?.members || []).filter((member) => member.membershipStatus === "active");
+  const members = (state.admin?.members || []).filter((member) => member.role === "member" && member.membershipStatus === "active");
   return `
     <option value="">Unassigned</option>
     ${members
@@ -2427,6 +2440,7 @@ function renderSocialAssignmentList(assignments) {
                 <span>Note</span>
                 <input name="note" value="${escapeHtml(assignment.note || "")}">
               </label>
+              ${renderSocialAssignmentResponseDetails(assignment)}
               <button class="secondary-button" type="submit">Save assignment</button>
             </form>
           `
@@ -2603,6 +2617,12 @@ function renderSocialCoordinator() {
       .filter((assignment) => Number(assignment.userId) === Number(state.user.id))
       .map((assignment) => ({ ...assignment, meeting }))
   );
+  const assignedMeetingIds = new Set(
+    myAssignments
+      .filter((assignment) => assignment.status === "assigned")
+      .map((assignment) => Number(assignment.meeting.id))
+  );
+  const requestableMeetings = meetings.filter((meeting) => assignedMeetingIds.has(Number(meeting.id)));
 
   return `
     <section class="content-grid">
@@ -2632,10 +2652,10 @@ function renderSocialCoordinator() {
             <div class="panel-header">
               <div>
                 <h3>Request resources</h3>
-                <p>Ask to use organization resources when it is your turn to host.</p>
+                <p>Requests are available only for meetings where you have an assigned task.</p>
               </div>
             </div>
-            ${renderResourceRequestForm(meetings, resources)}
+            ${renderResourceRequestForm(requestableMeetings, resources)}
           </div>
           <div class="panel">
             <div class="panel-header">
@@ -2689,12 +2709,44 @@ function renderSocialAssignmentSummary(assignments) {
             <div class="comment">
               <strong>${escapeHtml(socialTaskLabel(assignment.taskType))}</strong>
               <p>${escapeHtml(assignment.memberName || "Unassigned")}${assignment.groupName ? ` · ${escapeHtml(assignment.groupName)}` : ""}${assignment.note ? ` · ${escapeHtml(assignment.note)}` : ""}</p>
+              ${renderSocialAssignmentResponseDetails(assignment)}
             </div>
           `
         )
         .join("")}
     </div>
   `;
+}
+
+function renderSocialAssignmentResponseDetails(assignment) {
+  const foodContribution = String(assignment.foodContribution || "").trim();
+  const drinkBottleCount = Number(assignment.drinkBottleCount || 0);
+  const drinkBrand = String(assignment.drinkBrand || "").trim();
+  const responseNote = String(assignment.responseNote || "").trim();
+  const details = [];
+
+  if (foodContribution) {
+    details.push(`<span><strong>Food:</strong> ${escapeHtml(foodContribution)}</span>`);
+  }
+
+  if (drinkBottleCount > 0 || drinkBrand) {
+    const drinkParts = [];
+    if (drinkBottleCount > 0) {
+      drinkParts.push(`${drinkBottleCount} bottle${drinkBottleCount === 1 ? "" : "s"}`);
+    }
+    drinkParts.push(assignment.drinkIsAlcoholic ? "alcoholic" : "non-alcoholic");
+    if (drinkBrand) {
+      drinkParts.push(escapeHtml(drinkBrand));
+    }
+    details.push(`<span><strong>Drinks:</strong> ${drinkParts.join(", ")}</span>`);
+  }
+
+  if (responseNote) {
+    details.push(`<span><strong>Member note:</strong> ${escapeHtml(responseNote)}</span>`);
+  }
+
+  if (!details.length) return "";
+  return `<div class="assignment-response">${details.join("")}</div>`;
 }
 
 function renderMemberSocialAssignments(assignments) {
@@ -2714,6 +2766,8 @@ function renderMemberSocialAssignments(assignments) {
                 <span>${escapeHtml(assignment.status)}</span>
               </div>
               ${assignment.note ? `<p>${escapeHtml(assignment.note)}</p>` : ""}
+              ${renderSocialAssignmentResponseDetails(assignment)}
+              ${renderSocialAssignmentResponseForm(assignment)}
             </article>
           `
         )
@@ -2722,7 +2776,52 @@ function renderMemberSocialAssignments(assignments) {
   `;
 }
 
+function renderSocialAssignmentResponseForm(assignment) {
+  const isFoodAssignment = assignment.taskType === "food";
+  const isDrinkAssignment = assignment.taskType === "drinks";
+  if (assignment.status !== "assigned" || (!isFoodAssignment && !isDrinkAssignment)) {
+    return "";
+  }
+
+  return `
+    <form class="form-stack compact-form assignment-response-form" data-action="respond-social-assignment" data-assignment-id="${assignment.id}">
+      ${
+        isFoodAssignment
+          ? `<label class="field">
+              <span>Food you will bring</span>
+              <textarea name="foodContribution" required>${escapeHtml(assignment.foodContribution || "")}</textarea>
+            </label>`
+          : ""
+      }
+      ${
+        isDrinkAssignment
+          ? `<div class="form-grid">
+              <label class="field">
+                <span>Number of bottles</span>
+                <input name="drinkBottleCount" type="number" min="1" step="1" value="${Number(assignment.drinkBottleCount || 0) || ""}" required>
+              </label>
+              <label class="field">
+                <span>Drink brand</span>
+                <input name="drinkBrand" value="${escapeHtml(assignment.drinkBrand || "")}" required>
+              </label>
+            </div>
+            <label class="checkbox-row">
+              <input name="drinkIsAlcoholic" type="checkbox" ${assignment.drinkIsAlcoholic ? "checked" : ""}>
+              <span>Drink includes alcohol</span>
+            </label>`
+          : ""
+      }
+      <label class="field">
+        <span>Optional note</span>
+        <textarea name="responseNote">${escapeHtml(assignment.responseNote || "")}</textarea>
+      </label>
+      <button class="secondary-button" type="submit">Save task response</button>
+    </form>
+  `;
+}
+
 function renderResourceRequestForm(meetings, resources) {
+  if (!meetings.length) return emptyState("You can request resources after the admin assigns you a task for a meeting.");
   const activeResources = resources.filter((resource) => resource.status === "active");
   if (!activeResources.length) return emptyState("No active organization resources are available to request.");
 
@@ -2730,8 +2829,7 @@ function renderResourceRequestForm(meetings, resources) {
     <form class="form-stack" data-action="create-social-resource-request">
       <label class="field">
         <span>Meeting</span>
-        <select name="meetingId">
-          <option value="">No meeting selected</option>
+        <select name="meetingId" required>
           ${meetings
             .map((meeting) => `<option value="${meeting.id}">${escapeHtml(meeting.title)} - ${formatDate(meeting.meetingDate, { dateOnly: true })}</option>`)
             .join("")}
@@ -3895,6 +3993,19 @@ async function handleSubmit(event) {
       state.message = "Social assignment saved.";
       state.messageType = "ok";
       await refreshAll({ includeAdmin: true });
+      return;
+    }
+
+    if (action === "respond-social-assignment") {
+      payload.drinkIsAlcoholic = Boolean(form.elements.drinkIsAlcoholic?.checked);
+      payload.drinkBottleCount = Number(payload.drinkBottleCount || 0);
+      await api(`/api/social/assignments/${form.dataset.assignmentId}/response`, {
+        method: "PATCH",
+        body: JSON.stringify(payload)
+      });
+      state.message = "Task response saved.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: state.user.role === "admin" });
       return;
     }
 

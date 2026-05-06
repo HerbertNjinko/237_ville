@@ -376,10 +376,18 @@ CREATE TABLE IF NOT EXISTS social_assignments (
 ALTER TABLE social_assignments ADD COLUMN IF NOT EXISTS group_name TEXT NOT NULL DEFAULT 'general';
 ALTER TABLE social_assignments ADD COLUMN IF NOT EXISTS note TEXT DEFAULT '';
 ALTER TABLE social_assignments ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'assigned';
+ALTER TABLE social_assignments ADD COLUMN IF NOT EXISTS food_contribution TEXT DEFAULT '';
+ALTER TABLE social_assignments ADD COLUMN IF NOT EXISTS drink_bottle_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE social_assignments ADD COLUMN IF NOT EXISTS drink_is_alcoholic BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE social_assignments ADD COLUMN IF NOT EXISTS drink_brand TEXT DEFAULT '';
+ALTER TABLE social_assignments ADD COLUMN IF NOT EXISTS response_note TEXT DEFAULT '';
+ALTER TABLE social_assignments ADD COLUMN IF NOT EXISTS responded_at TIMESTAMPTZ;
 ALTER TABLE social_assignments DROP CONSTRAINT IF EXISTS social_assignments_task_type_check;
 ALTER TABLE social_assignments ADD CONSTRAINT social_assignments_task_type_check CHECK (task_type IN ('food', 'drinks', 'host', 'setup', 'cleanup', 'other'));
 ALTER TABLE social_assignments DROP CONSTRAINT IF EXISTS social_assignments_status_check;
 ALTER TABLE social_assignments ADD CONSTRAINT social_assignments_status_check CHECK (status IN ('assigned', 'completed', 'cancelled'));
+ALTER TABLE social_assignments DROP CONSTRAINT IF EXISTS social_assignments_drink_bottle_count_check;
+ALTER TABLE social_assignments ADD CONSTRAINT social_assignments_drink_bottle_count_check CHECK (drink_bottle_count >= 0);
 
 CREATE TABLE IF NOT EXISTS social_resources (
   id BIGSERIAL PRIMARY KEY,
