@@ -17,7 +17,7 @@ function isActiveSocialMeeting(meeting) {
 }
 
 function isActiveSocialAssignment(assignment) {
-  return assignment.status === "assigned" && !assignment.archivedAt && !isDateBeforeToday(assignment.meeting?.meetingDate || assignment.meetingDate);
+  return assignment.status === "assigned" && !assignment.archivedAt && !isDateBeforeToday(assignment.targetDate || assignment.eventDate || assignment.meeting?.meetingDate || assignment.meetingDate);
 }
 
 function isActiveMemberResourceRequest(request) {
@@ -74,6 +74,42 @@ function socialMeetingOptions(meetings = [], selectedId = "") {
   `;
 }
 
+function upcomingEventOptions(events = [], selectedId = "") {
+  const openEvents = events.filter((event) => event.status === "active" && !isDateBeforeToday(event.endsAt || event.startsAt));
+  return openEvents
+    .map(
+      (event) => `
+        <option value="${event.id}" ${Number(selectedId) === Number(event.id) ? "selected" : ""}>
+          ${escapeHtml(event.title)} - ${formatDate(event.startsAt, { dateOnly: true })}
+        </option>
+      `
+    )
+    .join("");
+}
+
+function socialTargetOptions(meetings = [], events = []) {
+  const openMeetings = meetings.filter((meeting) => !["completed", "cancelled"].includes(meeting.status) && !isDateBeforeToday(meeting.meetingDate));
+  const openEvents = events.filter((event) => event.status === "active" && !isDateBeforeToday(event.endsAt || event.startsAt));
+
+  return `
+    <option value="">Choose meeting or event</option>
+    ${openMeetings.length
+      ? `<optgroup label="Monthly meetings">
+          ${openMeetings
+            .map((meeting) => `<option value="meeting:${meeting.id}">${escapeHtml(meeting.title)} - ${formatDate(meeting.meetingDate, { dateOnly: true })}</option>`)
+            .join("")}
+        </optgroup>`
+      : ""}
+    ${openEvents.length
+      ? `<optgroup label="Upcoming events">
+          ${openEvents
+            .map((event) => `<option value="event:${event.id}">${escapeHtml(event.title)} - ${formatDate(event.startsAt, { dateOnly: true })}</option>`)
+            .join("")}
+        </optgroup>`
+      : ""}
+  `;
+}
+
 function flattenSocialAssignments(meetings = []) {
   return meetings.flatMap((meeting) =>
     (meeting.assignments || []).map((assignment) => ({
@@ -85,16 +121,30 @@ function flattenSocialAssignments(meetings = []) {
   );
 }
 
+function socialAssignmentsForDisplay(social = {}) {
+  if (Array.isArray(social.assignments)) {
+    return social.assignments.map((assignment) => ({
+      ...assignment,
+      meetingTitle: assignment.meetingTitle || assignment.targetTitle,
+      meetingDate: assignment.meetingDate || assignment.targetDate,
+      meetingStatus: assignment.meetingStatus || assignment.targetStatus
+    }));
+  }
+
+  return flattenSocialAssignments(social.meetings || []);
+}
+
 function renderAdminSocialCoordinator() {
   const loading = requireAdminData("Loading social coordinator...");
   if (loading) return loading;
 
-  const social = state.admin.social || { meetings: [], resources: [], resourceRequests: [], resourceAdjustments: [], fundRequests: [] };
-  const assignments = flattenSocialAssignments(social.meetings || []);
+  const social = state.admin.social || { meetings: [], events: [], assignments: [], resources: [], resourceRequests: [], resourceAdjustments: [], fundRequests: [] };
+  const assignments = socialAssignmentsForDisplay(social);
   const pendingRequests = (social.resourceRequests || []).filter((request) => request.status === "pending");
   const checkedOutRequests = (social.resourceRequests || []).filter((request) => request.status === "delivered");
   const pendingFundRequests = (social.fundRequests || []).filter((request) => request.status === "pending");
   const currentMeetings = (social.meetings || []).filter((meeting) => meeting.status !== "completed" && meeting.status !== "cancelled");
+  const currentEvents = (social.events || []).filter((event) => event.status === "active" && !isDateBeforeToday(event.endsAt || event.startsAt));
   const checkedOutResources = (social.resources || []).reduce(
     (total, resource) => total + Math.max(0, Number(resource.totalQuantity || 0) - Number(resource.availableQuantity || 0)),
     0
@@ -105,6 +155,7 @@ function renderAdminSocialCoordinator() {
       <div class="metric-grid">
         <div class="metric"><span>Meetings tracked</span><strong>${(social.meetings || []).length}</strong></div>
         <div class="metric"><span>Open meetings</span><strong>${currentMeetings.length}</strong></div>
+        <div class="metric"><span>Upcoming events</span><strong>${currentEvents.length}</strong></div>
         <div class="metric"><span>Assignments</span><strong>${assignments.length}</strong></div>
         <div class="metric"><span>Pending requests</span><strong>${pendingRequests.length}</strong></div>
         <div class="metric"><span>Checked out</span><strong>${checkedOutRequests.length}</strong></div>
@@ -195,7 +246,7 @@ function renderAdminSocialAssignmentsSection(social, assignments) {
         <div class="panel-header">
           <div>
             <h3>Assignments</h3>
-            <p>Manage food, drinks, hosting, setup, and cleanup tasks across monthly meetings.</p>
+            <p>Manage food, drinks, hosting, setup, and cleanup tasks across monthly meetings and upcoming events.</p>
           </div>
         </div>
         ${renderSocialAssignmentList(activeAssignments, "No active assignments yet.")}
@@ -203,7 +254,7 @@ function renderAdminSocialAssignmentsSection(social, assignments) {
           <div class="panel-header">
             <div>
               <h3>Archived assignments</h3>
-              <p>Assignments are archived automatically after the meeting date passes.</p>
+              <p>Assignments are archived automatically after the meeting or event date passes.</p>
             </div>
           </div>
           ${renderSocialAssignmentList(archivedAssignments, "No archived assignments yet.")}
@@ -213,10 +264,10 @@ function renderAdminSocialAssignmentsSection(social, assignments) {
         <div class="panel-header">
           <div>
             <h3>Assign task</h3>
-            <p>Choose a meeting and assign responsibility to an active member.</p>
+            <p>Choose a monthly meeting or upcoming event and assign responsibility to an active member.</p>
           </div>
         </div>
-        ${renderSocialAssignmentForm("", social.meetings || [])}
+        ${renderSocialAssignmentForm("", social.meetings || [], social.events || [])}
       </aside>
     </section>
   `;
@@ -437,13 +488,13 @@ function renderSocialAssignmentList(assignments, emptyText = "No assignments yet
           (assignment) => `
             <form class="item-card compact-card" data-action="update-social-assignment" data-assignment-id="${assignment.id}">
               ${
-                assignment.meetingTitle
+                assignment.targetTitle || assignment.meetingTitle
                   ? `<div class="panel-header">
                       <div>
-                        <h4>${escapeHtml(assignment.meetingTitle)}</h4>
-                        <p>${formatDate(assignment.meetingDate, { dateOnly: true })}</p>
+                        <h4>${escapeHtml(assignment.targetTitle || assignment.meetingTitle)}</h4>
+                        <p>${assignment.targetType === "event" ? "Event" : "Monthly meeting"} · ${formatDate(assignment.targetDate || assignment.meetingDate, { dateOnly: true })}</p>
                       </div>
-                      ${assignment.meetingStatus ? statusPill(assignment.meetingStatus) : ""}
+                      ${assignment.targetStatus || assignment.meetingStatus ? statusPill(assignment.targetStatus || assignment.meetingStatus) : ""}
                     </div>`
                   : ""
               }
@@ -483,21 +534,23 @@ function renderSocialAssignmentList(assignments, emptyText = "No assignments yet
   `;
 }
 
-function renderSocialAssignmentForm(meetingId = "", meetings = []) {
-  const meetingField = meetingId
+function renderSocialAssignmentForm(meetingId = "", meetings = [], events = []) {
+  const targetField = meetingId
     ? ""
     : `<label class="field">
-        <span>Monthly meeting</span>
-        <select name="meetingId" required>${socialMeetingOptions(meetings)}</select>
+        <span>Monthly meeting or upcoming event</span>
+        <select name="target" required>${socialTargetOptions(meetings, events)}</select>
       </label>`;
+  const openMeetings = meetings.filter((meeting) => !["completed", "cancelled"].includes(meeting.status) && !isDateBeforeToday(meeting.meetingDate));
+  const openEvents = events.filter((event) => event.status === "active" && !isDateBeforeToday(event.endsAt || event.startsAt));
 
-  if (!meetingId && !meetings.filter((meeting) => !["completed", "cancelled"].includes(meeting.status)).length) {
-    return emptyState("Create an open monthly meeting before assigning tasks.");
+  if (!meetingId && !openMeetings.length && !openEvents.length) {
+    return emptyState("Create an open monthly meeting or upcoming event before assigning tasks.");
   }
 
   return `
     <form class="form-stack social-assignment-form" data-action="create-social-assignment" ${meetingId ? `data-meeting-id="${meetingId}"` : ""}>
-      ${meetingField}
+      ${targetField}
       <div class="form-grid">
         <label class="field">
           <span>Member</span>
@@ -685,7 +738,7 @@ function renderAdminCheckedOutResourceRequests(requests) {
               <div class="panel-header">
                 <div>
                   <h4>${escapeHtml(request.resourceName)}</h4>
-                  <p>${escapeHtml(request.requesterName)} has ${request.quantity}${request.meetingTitle ? ` for ${escapeHtml(request.meetingTitle)}` : ""}</p>
+                  <p>${escapeHtml(request.requesterName)} has ${request.quantity}${request.targetTitle ? ` for ${escapeHtml(request.targetTitle)}` : ""}</p>
                 </div>
                 ${statusPill(request.status)}
               </div>
@@ -727,7 +780,7 @@ function renderAdminSocialFundRequests(requests) {
               <div class="panel-header">
                 <div>
                   <h4>${escapeHtml(request.itemDescription)}</h4>
-                  <p>${escapeHtml(request.requesterName)} requested ${formatMoney(request.amountCents)}${request.meetingTitle ? ` for ${escapeHtml(request.meetingTitle)}` : ""}</p>
+                  <p>${escapeHtml(request.requesterName)} requested ${formatMoney(request.amountCents)}${request.targetTitle ? ` for ${escapeHtml(request.targetTitle)}` : ""}</p>
                 </div>
                 ${statusPill(request.status)}
               </div>
@@ -768,7 +821,7 @@ function renderAdminSocialResourceRequests(requests) {
               <div class="panel-header">
                 <div>
                   <h4>${escapeHtml(request.resourceName)}</h4>
-                  <p>${escapeHtml(request.requesterName)} requested ${request.quantity}${request.meetingTitle ? ` for ${escapeHtml(request.meetingTitle)}` : ""}</p>
+                  <p>${escapeHtml(request.requesterName)} requested ${request.quantity}${request.targetTitle ? ` for ${escapeHtml(request.targetTitle)}` : ""}</p>
                 </div>
                 ${statusPill(request.status)}
               </div>
@@ -812,21 +865,35 @@ function renderAdminSocialResourceRequests(requests) {
 }
 
 function renderSocialCoordinator() {
-  const social = state.data.social || { meetings: [], resources: [], resourceRequests: [], fundRequests: [] };
+  const social = state.data.social || { meetings: [], events: [], assignments: [], resources: [], resourceRequests: [], fundRequests: [] };
   const meetings = social.meetings || [];
   const resources = social.resources || [];
   const fundRequests = social.fundRequests || [];
-  const myAssignments = meetings.flatMap((meeting) =>
-    (meeting.assignments || [])
-      .filter((assignment) => Number(assignment.userId) === Number(state.user.id))
-      .map((assignment) => ({ ...assignment, meeting }))
-  ).filter(isActiveSocialAssignment);
+  const myAssignments = socialAssignmentsForDisplay(social)
+    .filter((assignment) => Number(assignment.userId) === Number(state.user.id))
+    .filter(isActiveSocialAssignment);
   const activeResourceRequests = (social.resourceRequests || []).filter(isActiveMemberResourceRequest);
-  const assignedMeetingIds = new Set(
-    myAssignments
-      .map((assignment) => Number(assignment.meeting.id))
+  const requestableTargets = Array.from(
+    new Map(
+      myAssignments
+        .map((assignment) => {
+          const targetType = assignment.eventId ? "event" : "meeting";
+          const targetId = assignment.eventId || assignment.meetingId;
+          if (!targetId) return null;
+          return [
+            `${targetType}:${targetId}`,
+            {
+              key: `${targetType}:${targetId}`,
+              type: targetType,
+              id: targetId,
+              title: assignment.targetTitle || assignment.eventTitle || assignment.meetingTitle,
+              date: assignment.targetDate || assignment.eventDate || assignment.meetingDate
+            }
+          ];
+        })
+        .filter(Boolean)
+    ).values()
   );
-  const requestableMeetings = meetings.filter((meeting) => assignedMeetingIds.has(Number(meeting.id)) && isActiveSocialMeeting(meeting));
 
   return `
     <section class="content-grid">
@@ -845,10 +912,10 @@ function renderSocialCoordinator() {
             <div class="panel-header">
               <div>
                 <h3>Request resources</h3>
-                <p>Requests are available only for meetings where you have an assigned task.</p>
+                <p>Requests are available only for meetings or events where you have an assigned task.</p>
               </div>
             </div>
-            ${renderResourceRequestForm(requestableMeetings, resources)}
+            ${renderResourceRequestForm(requestableTargets, resources)}
           </div>
           <div class="panel">
             <div class="panel-header">
@@ -953,7 +1020,7 @@ function renderMemberSocialAssignments(assignments, fundRequests = []) {
           return `
             <article class="item-card">
               <h4>${escapeHtml(assignment.title)}</h4>
-              <p>${escapeHtml(assignment.meeting.title)} · ${formatDate(assignment.meeting.meetingDate, { dateOnly: true })}</p>
+              <p>${escapeHtml(assignment.targetTitle || assignment.eventTitle || assignment.meetingTitle)} · ${assignment.targetType === "event" ? "Event" : "Monthly meeting"} · ${formatDate(assignment.targetDate || assignment.eventDate || assignment.meetingDate, { dateOnly: true })}</p>
               <div class="item-meta">
                 <span>${escapeHtml(socialTaskLabel(assignment.taskType))}</span>
                 <span>${escapeHtml(assignment.groupName || "general")}</span>
@@ -1065,18 +1132,18 @@ function renderSocialAssignmentResponseForm(assignment) {
   `;
 }
 
-function renderResourceRequestForm(meetings, resources) {
-  if (!meetings.length) return emptyState("You can request resources after the admin assigns you a task for a meeting.");
+function renderResourceRequestForm(targets, resources) {
+  if (!targets.length) return emptyState("You can request resources after the admin assigns you a task for a meeting or event.");
   const activeResources = resources.filter((resource) => resource.status === "active");
   if (!activeResources.length) return emptyState("No active organization resources are available to request.");
 
   return `
     <form class="form-stack" data-action="create-social-resource-request">
       <label class="field">
-        <span>Meeting</span>
-        <select name="meetingId" required>
-          ${meetings
-            .map((meeting) => `<option value="${meeting.id}">${escapeHtml(meeting.title)} - ${formatDate(meeting.meetingDate, { dateOnly: true })}</option>`)
+        <span>Meeting or event</span>
+        <select name="target" required>
+          ${targets
+            .map((target) => `<option value="${escapeHtml(target.key)}">${escapeHtml(target.title)} - ${target.type === "event" ? "Event" : "Meeting"} - ${formatDate(target.date, { dateOnly: true })}</option>`)
             .join("")}
         </select>
       </label>
@@ -1123,7 +1190,7 @@ function renderMemberResourceRequests(requests) {
               <div class="panel-header">
                 <div>
                   <h4>${escapeHtml(request.resourceName)}</h4>
-                  <p>Quantity ${request.quantity}${request.meetingTitle ? ` · ${escapeHtml(request.meetingTitle)}` : ""}</p>
+                  <p>Quantity ${request.quantity}${request.targetTitle ? ` · ${escapeHtml(request.targetTitle)}` : ""}</p>
                 </div>
                 ${statusPill(request.status)}
               </div>

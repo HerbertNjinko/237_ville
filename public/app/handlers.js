@@ -374,15 +374,19 @@ async function handleSubmit(event) {
     }
 
     if (action === "create-social-assignment") {
-      const meetingId = form.dataset.meetingId || payload.meetingId;
-      if (!meetingId) {
-        state.message = "Choose a monthly meeting before assigning the task.";
+      const target = String(payload.target || "").trim();
+      const [targetType, targetId] = form.dataset.meetingId
+        ? ["meeting", form.dataset.meetingId]
+        : target.split(":");
+      if (!targetType || !targetId || !["meeting", "event"].includes(targetType)) {
+        state.message = "Choose a monthly meeting or upcoming event before assigning the task.";
         state.messageType = "error";
         render();
         return;
       }
       delete payload.meetingId;
-      await api(`/api/admin/social/meetings/${meetingId}/assignments`, {
+      delete payload.target;
+      await api(`/api/admin/social/${targetType === "event" ? "events" : "meetings"}/${targetId}/assignments`, {
         method: "POST",
         body: JSON.stringify(payload)
       });
@@ -480,6 +484,13 @@ async function handleSubmit(event) {
     }
 
     if (action === "create-social-resource-request") {
+      const [targetType, targetId] = String(payload.target || "").split(":");
+      if (targetType === "event") {
+        payload.eventId = Number(targetId);
+      } else {
+        payload.meetingId = Number(targetId || payload.meetingId || 0);
+      }
+      delete payload.target;
       await api("/api/social/resource-requests", {
         method: "POST",
         body: JSON.stringify(payload)

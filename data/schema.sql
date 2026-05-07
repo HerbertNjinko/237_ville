@@ -467,6 +467,8 @@ CREATE TABLE IF NOT EXISTS social_assignments (
   archived_at TIMESTAMPTZ
 );
 
+ALTER TABLE social_assignments ALTER COLUMN meeting_id DROP NOT NULL;
+ALTER TABLE social_assignments ADD COLUMN IF NOT EXISTS event_id BIGINT REFERENCES events(id) ON DELETE CASCADE;
 ALTER TABLE social_assignments ADD COLUMN IF NOT EXISTS group_name TEXT NOT NULL DEFAULT 'general';
 ALTER TABLE social_assignments ADD COLUMN IF NOT EXISTS note TEXT DEFAULT '';
 ALTER TABLE social_assignments ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'assigned';
@@ -535,6 +537,7 @@ CREATE TABLE IF NOT EXISTS social_resource_requests (
 );
 
 ALTER TABLE social_resource_requests ADD COLUMN IF NOT EXISTS meeting_id BIGINT REFERENCES social_meetings(id) ON DELETE SET NULL;
+ALTER TABLE social_resource_requests ADD COLUMN IF NOT EXISTS event_id BIGINT REFERENCES events(id) ON DELETE SET NULL;
 ALTER TABLE social_resource_requests ADD COLUMN IF NOT EXISTS needed_date DATE;
 ALTER TABLE social_resource_requests ADD COLUMN IF NOT EXISTS return_date DATE;
 ALTER TABLE social_resource_requests ADD COLUMN IF NOT EXISTS note TEXT DEFAULT '';
@@ -583,6 +586,7 @@ CREATE TABLE IF NOT EXISTS social_fund_requests (
 );
 
 ALTER TABLE social_fund_requests ADD COLUMN IF NOT EXISTS meeting_id BIGINT REFERENCES social_meetings(id) ON DELETE SET NULL;
+ALTER TABLE social_fund_requests ADD COLUMN IF NOT EXISTS event_id BIGINT REFERENCES events(id) ON DELETE SET NULL;
 ALTER TABLE social_fund_requests ADD COLUMN IF NOT EXISTS assignment_id BIGINT REFERENCES social_assignments(id) ON DELETE CASCADE;
 ALTER TABLE social_fund_requests ADD COLUMN IF NOT EXISTS item_description TEXT NOT NULL DEFAULT '';
 ALTER TABLE social_fund_requests ADD COLUMN IF NOT EXISTS amount_cents INTEGER NOT NULL DEFAULT 1;
@@ -624,16 +628,19 @@ CREATE INDEX IF NOT EXISTS idx_department_budgets_assigned ON department_budgets
 CREATE INDEX IF NOT EXISTS idx_department_budget_expenses_budget ON department_budget_expenses(budget_id, status, expense_date DESC);
 CREATE INDEX IF NOT EXISTS idx_social_meetings_date ON social_meetings(meeting_date DESC);
 CREATE INDEX IF NOT EXISTS idx_social_assignments_meeting ON social_assignments(meeting_id);
+CREATE INDEX IF NOT EXISTS idx_social_assignments_event ON social_assignments(event_id);
 CREATE INDEX IF NOT EXISTS idx_social_assignments_user ON social_assignments(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_social_assignments_archive ON social_assignments(status, archived_at);
 CREATE INDEX IF NOT EXISTS idx_social_resources_status ON social_resources(status, name);
 CREATE INDEX IF NOT EXISTS idx_social_resource_requests_user ON social_resource_requests(requested_by, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_social_resource_requests_status ON social_resource_requests(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_social_resource_requests_archive ON social_resource_requests(requested_by, archived_at);
+CREATE INDEX IF NOT EXISTS idx_social_resource_requests_event ON social_resource_requests(event_id);
 CREATE INDEX IF NOT EXISTS idx_social_resource_adjustments_resource ON social_resource_adjustments(resource_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_social_fund_requests_user ON social_fund_requests(requested_by, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_social_fund_requests_status ON social_fund_requests(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_social_fund_requests_assignment ON social_fund_requests(assignment_id, status);
+CREATE INDEX IF NOT EXISTS idx_social_fund_requests_event ON social_fund_requests(event_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_users_membership_status ON users(membership_status);
 CREATE INDEX IF NOT EXISTS idx_users_staff_role ON users(staff_role) WHERE staff_role <> '';

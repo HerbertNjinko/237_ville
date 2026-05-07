@@ -1553,12 +1553,26 @@ function toSocialResourceAdjustment(row) {
 }
 
 function toSocialAssignment(row) {
+  const meetingId = row.meeting_id ? Number(row.meeting_id) : null;
+  const eventId = row.event_id ? Number(row.event_id) : null;
+  const eventDate = row.event_starts_at || row.event_date || null;
   return {
     id: Number(row.id),
-    meetingId: Number(row.meeting_id),
+    meetingId,
+    eventId,
     userId: row.user_id ? Number(row.user_id) : null,
     memberName: row.member_name || "Unassigned",
     memberEmail: row.member_email || "",
+    meetingTitle: row.meeting_title || "",
+    meetingDate: row.meeting_date || null,
+    meetingStatus: row.meeting_status || "",
+    eventTitle: row.event_title || "",
+    eventDate,
+    eventStatus: row.event_status || "",
+    targetType: eventId ? "event" : "meeting",
+    targetTitle: row.event_title || row.meeting_title || "",
+    targetDate: eventDate || row.meeting_date || null,
+    targetStatus: row.event_status || row.meeting_status || "",
     taskType: row.task_type,
     groupName: row.group_name || defaultSocialGroup(row.task_type),
     title: row.title,
@@ -1577,11 +1591,18 @@ function toSocialAssignment(row) {
 }
 
 function toSocialFundRequest(row) {
+  const eventDate = row.event_starts_at || row.event_date || null;
   return {
     id: Number(row.id),
     meetingId: row.meeting_id ? Number(row.meeting_id) : null,
     meetingTitle: row.meeting_title || "",
     meetingDate: row.meeting_date || null,
+    eventId: row.event_id ? Number(row.event_id) : null,
+    eventTitle: row.event_title || "",
+    eventDate,
+    targetType: row.event_id ? "event" : "meeting",
+    targetTitle: row.event_title || row.meeting_title || "",
+    targetDate: eventDate || row.meeting_date || null,
     assignmentId: row.assignment_id ? Number(row.assignment_id) : null,
     assignmentTitle: row.assignment_title || "",
     taskType: row.task_type || "",
@@ -1603,11 +1624,18 @@ function toSocialFundRequest(row) {
 }
 
 function toSocialResourceRequest(row) {
+  const eventDate = row.event_starts_at || row.event_date || null;
   return {
     id: Number(row.id),
     meetingId: row.meeting_id ? Number(row.meeting_id) : null,
     meetingTitle: row.meeting_title || "",
     meetingDate: row.meeting_date || null,
+    eventId: row.event_id ? Number(row.event_id) : null,
+    eventTitle: row.event_title || "",
+    eventDate,
+    targetType: row.event_id ? "event" : "meeting",
+    targetTitle: row.event_title || row.meeting_title || "",
+    targetDate: eventDate || row.meeting_date || null,
     resourceId: Number(row.resource_id),
     resourceName: row.resource_name || "",
     requestedBy: Number(row.requested_by),
@@ -1646,6 +1674,22 @@ function toSocialMeeting(row, assignments = [], resourceRequests = []) {
   };
 }
 
+function toSocialEvent(row, assignments = [], resourceRequests = []) {
+  return {
+    id: Number(row.id),
+    title: row.title,
+    description: row.description || "",
+    location: row.location || "",
+    startsAt: row.starts_at,
+    endsAt: row.ends_at,
+    status: row.status || "active",
+    archivedAt: row.archived_at,
+    authorName: row.author_name || "237 Ville",
+    assignments: assignments.filter((assignment) => Number(assignment.eventId) === Number(row.id)),
+    resourceRequests: resourceRequests.filter((request) => Number(request.eventId) === Number(row.id))
+  };
+}
+
 async function archivePastSocialItems() {
   await query(
     `
@@ -1656,6 +1700,19 @@ async function archivePastSocialItems() {
       FROM social_meetings
       WHERE social_assignments.meeting_id = social_meetings.id
         AND social_meetings.meeting_date < CURRENT_DATE
+        AND social_assignments.status IN ('assigned', 'completed')
+    `
+  );
+
+  await query(
+    `
+      UPDATE social_assignments
+      SET status = 'archived',
+          archived_at = COALESCE(archived_at, now()),
+          updated_at = now()
+      FROM events
+      WHERE social_assignments.event_id = events.id
+        AND COALESCE(events.ends_at, events.starts_at) < now()
         AND social_assignments.status IN ('assigned', 'completed')
     `
   );
@@ -1696,6 +1753,17 @@ async function listSocialCoordinator(user, { includeAll = false } = {}) {
     `,
     [Boolean(includeAll)]
   );
+  const eventsResult = await query(
+    `
+      SELECT events.*, users.full_name AS author_name
+      FROM events
+      LEFT JOIN users ON users.id = events.created_by
+      WHERE ($1::boolean = true OR (events.status = 'active' AND COALESCE(events.ends_at, events.starts_at) >= now()))
+      ORDER BY events.starts_at ASC
+      LIMIT 100
+    `,
+    [Boolean(includeAll)]
+  );
   const resourcesResult = await query(
     `
       SELECT *
@@ -1722,20 +1790,41 @@ async function listSocialCoordinator(user, { includeAll = false } = {}) {
     : { rows: [] };
   const assignmentsResult = await query(
     `
-      SELECT social_assignments.*, users.full_name AS member_name, users.email AS member_email
+      SELECT social_assignments.*,
+             users.full_name AS member_name,
+             users.email AS member_email,
+             social_meetings.title AS meeting_title,
+             social_meetings.meeting_date,
+             social_meetings.status AS meeting_status,
+             events.title AS event_title,
+             events.starts_at AS event_starts_at,
+             events.status AS event_status
       FROM social_assignments
       LEFT JOIN users ON users.id = social_assignments.user_id
-      JOIN social_meetings ON social_meetings.id = social_assignments.meeting_id
+      LEFT JOIN social_meetings ON social_meetings.id = social_assignments.meeting_id
+      LEFT JOIN events ON events.id = social_assignments.event_id
       WHERE (
         $1::boolean = true
         OR (
           social_assignments.status <> 'archived'
           AND social_assignments.archived_at IS NULL
-          AND social_meetings.status = 'published'
-          AND social_meetings.meeting_date >= CURRENT_DATE
+          AND (
+            (
+              social_assignments.meeting_id IS NOT NULL
+              AND social_meetings.status = 'published'
+              AND social_meetings.meeting_date >= CURRENT_DATE
+            )
+            OR (
+              social_assignments.event_id IS NOT NULL
+              AND events.status = 'active'
+              AND COALESCE(events.ends_at, events.starts_at) >= now()
+            )
+          )
         )
       )
-      ORDER BY social_meetings.meeting_date DESC, social_assignments.task_type ASC, social_assignments.created_at ASC
+      ORDER BY COALESCE(social_meetings.meeting_date::timestamptz, events.starts_at) DESC,
+               social_assignments.task_type ASC,
+               social_assignments.created_at ASC
       LIMIT 500
     `,
     [Boolean(includeAll)]
@@ -1747,12 +1836,15 @@ async function listSocialCoordinator(user, { includeAll = false } = {}) {
                  social_resources.name AS resource_name,
                  social_meetings.title AS meeting_title,
                  social_meetings.meeting_date,
+                 events.title AS event_title,
+                 events.starts_at AS event_starts_at,
                  users.full_name AS requester_name,
                  users.email AS requester_email
           FROM social_resource_requests
           JOIN social_resources ON social_resources.id = social_resource_requests.resource_id
           JOIN users ON users.id = social_resource_requests.requested_by
           LEFT JOIN social_meetings ON social_meetings.id = social_resource_requests.meeting_id
+          LEFT JOIN events ON events.id = social_resource_requests.event_id
           ORDER BY social_resource_requests.created_at DESC
           LIMIT 300
         `
@@ -1763,12 +1855,15 @@ async function listSocialCoordinator(user, { includeAll = false } = {}) {
                  social_resources.name AS resource_name,
                  social_meetings.title AS meeting_title,
                  social_meetings.meeting_date,
+                 events.title AS event_title,
+                 events.starts_at AS event_starts_at,
                  users.full_name AS requester_name,
                  users.email AS requester_email
           FROM social_resource_requests
           JOIN social_resources ON social_resources.id = social_resource_requests.resource_id
           JOIN users ON users.id = social_resource_requests.requested_by
           LEFT JOIN social_meetings ON social_meetings.id = social_resource_requests.meeting_id
+          LEFT JOIN events ON events.id = social_resource_requests.event_id
           WHERE social_resource_requests.requested_by = $1
             AND social_resource_requests.archived_at IS NULL
           ORDER BY social_resource_requests.created_at DESC
@@ -1782,6 +1877,8 @@ async function listSocialCoordinator(user, { includeAll = false } = {}) {
           SELECT social_fund_requests.*,
                  social_meetings.title AS meeting_title,
                  social_meetings.meeting_date,
+                 events.title AS event_title,
+                 events.starts_at AS event_starts_at,
                  social_assignments.title AS assignment_title,
                  social_assignments.task_type,
                  users.full_name AS requester_name,
@@ -1789,6 +1886,7 @@ async function listSocialCoordinator(user, { includeAll = false } = {}) {
           FROM social_fund_requests
           JOIN users ON users.id = social_fund_requests.requested_by
           LEFT JOIN social_meetings ON social_meetings.id = social_fund_requests.meeting_id
+          LEFT JOIN events ON events.id = social_fund_requests.event_id
           LEFT JOIN social_assignments ON social_assignments.id = social_fund_requests.assignment_id
           ORDER BY social_fund_requests.created_at DESC
           LIMIT 300
@@ -1799,6 +1897,8 @@ async function listSocialCoordinator(user, { includeAll = false } = {}) {
           SELECT social_fund_requests.*,
                  social_meetings.title AS meeting_title,
                  social_meetings.meeting_date,
+                 events.title AS event_title,
+                 events.starts_at AS event_starts_at,
                  social_assignments.title AS assignment_title,
                  social_assignments.task_type,
                  users.full_name AS requester_name,
@@ -1806,6 +1906,7 @@ async function listSocialCoordinator(user, { includeAll = false } = {}) {
           FROM social_fund_requests
           JOIN users ON users.id = social_fund_requests.requested_by
           LEFT JOIN social_meetings ON social_meetings.id = social_fund_requests.meeting_id
+          LEFT JOIN events ON events.id = social_fund_requests.event_id
           LEFT JOIN social_assignments ON social_assignments.id = social_fund_requests.assignment_id
           WHERE social_fund_requests.requested_by = $1
           ORDER BY social_fund_requests.created_at DESC
@@ -1820,6 +1921,8 @@ async function listSocialCoordinator(user, { includeAll = false } = {}) {
 
   return {
     meetings: meetingsResult.rows.map((row) => toSocialMeeting(row, assignments, requests)),
+    events: eventsResult.rows.map((row) => toSocialEvent(row, assignments, requests)),
+    assignments,
     resources: resourcesResult.rows.map(toSocialResource),
     resourceAdjustments: adjustmentsResult.rows.map(toSocialResourceAdjustment),
     resourceRequests: requests,
@@ -1833,6 +1936,8 @@ async function getSocialFundRequest(id) {
       SELECT social_fund_requests.*,
              social_meetings.title AS meeting_title,
              social_meetings.meeting_date,
+             events.title AS event_title,
+             events.starts_at AS event_starts_at,
              social_assignments.title AS assignment_title,
              social_assignments.task_type,
              users.full_name AS requester_name,
@@ -1840,6 +1945,7 @@ async function getSocialFundRequest(id) {
       FROM social_fund_requests
       JOIN users ON users.id = social_fund_requests.requested_by
       LEFT JOIN social_meetings ON social_meetings.id = social_fund_requests.meeting_id
+      LEFT JOIN events ON events.id = social_fund_requests.event_id
       LEFT JOIN social_assignments ON social_assignments.id = social_fund_requests.assignment_id
       WHERE social_fund_requests.id = $1
       LIMIT 1

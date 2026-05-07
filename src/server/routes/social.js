@@ -163,20 +163,35 @@ export async function handleSocialRoutes(req, res, url, context) {
     return sendJson(res, 200, { meeting: toSocialMeeting(rows[0]) });
   }
 
-  const socialAssignmentCreateMatch = pathname.match(/^\/api\/admin\/social\/meetings\/(\d+)\/assignments$/);
+  const socialAssignmentCreateMatch = pathname.match(/^\/api\/admin\/social\/(meetings|events)\/(\d+)\/assignments$/);
   if (method === "POST" && socialAssignmentCreateMatch) {
     const admin = await requireStaffPermission(req, res, "social");
     if (!admin) return;
-    const meetingId = parseId(socialAssignmentCreateMatch[1]);
+    const targetType = socialAssignmentCreateMatch[1] === "events" ? "event" : "meeting";
+    const targetId = parseId(socialAssignmentCreateMatch[2]);
+    const meetingId = targetType === "meeting" ? targetId : null;
+    const eventId = targetType === "event" ? targetId : null;
     const payload = await readJson(req);
     requireFields(payload, ["title"]);
     const taskType = normalizeSocialTaskType(payload.taskType);
     const memberId = payload.userId ? parseId(payload.userId) : null;
 
-    const meetingResult = await query("SELECT * FROM social_meetings WHERE id = $1", [meetingId]);
-    if (meetingResult.rows.length === 0) {
-      return sendError(res, 404, "Social meeting not found.");
+    const targetResult = targetType === "meeting"
+      ? await query("SELECT id, title, meeting_date AS target_date, status FROM social_meetings WHERE id = $1", [targetId])
+      : await query(
+          `
+            SELECT id, title, starts_at::date AS target_date, status
+            FROM events
+            WHERE id = $1
+              AND status = 'active'
+              AND COALESCE(ends_at, starts_at) >= now()
+          `,
+          [targetId]
+        );
+    if (targetResult.rows.length === 0) {
+      return sendError(res, 404, targetType === "event" ? "Upcoming active event not found." : "Social meeting not found.");
     }
+    const target = targetResult.rows[0];
 
     if (memberId) {
       const memberResult = await query(
@@ -190,12 +205,13 @@ export async function handleSocialRoutes(req, res, url, context) {
 
     const { rows } = await query(
       `
-        INSERT INTO social_assignments (meeting_id, user_id, task_type, group_name, title, note, status)
-        VALUES ($1, $2, $3, $4, $5, $6, 'assigned')
+        INSERT INTO social_assignments (meeting_id, event_id, user_id, task_type, group_name, title, note, status)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, 'assigned')
         RETURNING *
       `,
       [
         meetingId,
+        eventId,
         memberId,
         taskType,
         String(payload.groupName || defaultSocialGroup(taskType)).trim(),
@@ -208,13 +224,13 @@ export async function handleSocialRoutes(req, res, url, context) {
       await createNotification(
         memberId,
         "social_assignment",
-        "Social meeting assignment",
-        `You were assigned ${socialTaskLabel(taskType).toLowerCase()} for ${meetingResult.rows[0].title} on ${meetingResult.rows[0].meeting_date}.`,
+        targetType === "event" ? "Event assignment" : "Social meeting assignment",
+        `You were assigned ${socialTaskLabel(taskType).toLowerCase()} for ${target.title} on ${target.target_date}.`,
         "/social"
       );
     }
 
-    return sendJson(res, 201, { assignment: rows[0] });
+    return sendJson(res, 201, { assignment: toSocialAssignment(rows[0]) });
   }
 
   const socialAssignmentMatch = pathname.match(/^\/api\/admin\/social\/assignments\/(\d+)$/);
@@ -285,9 +301,13 @@ export async function handleSocialRoutes(req, res, url, context) {
         SELECT social_assignments.*,
                social_meetings.title AS meeting_title,
                social_meetings.meeting_date,
-               social_meetings.status AS meeting_status
+               social_meetings.status AS meeting_status,
+               events.title AS event_title,
+               events.starts_at AS event_starts_at,
+               events.status AS event_status
         FROM social_assignments
-        JOIN social_meetings ON social_meetings.id = social_assignments.meeting_id
+        LEFT JOIN social_meetings ON social_meetings.id = social_assignments.meeting_id
+        LEFT JOIN events ON events.id = social_assignments.event_id
         WHERE social_assignments.id = $1
         LIMIT 1
       `,
@@ -303,8 +323,10 @@ export async function handleSocialRoutes(req, res, url, context) {
     if (assignment.status !== "assigned") {
       return sendError(res, 400, "Only active assignments can be updated.");
     }
-    if (assignment.meeting_status !== "published" || String(assignment.meeting_date).slice(0, 10) < new Date().toISOString().slice(0, 10)) {
-      return sendError(res, 403, "You can only respond before a published meeting date passes.");
+    const targetStatusOk = assignment.event_id ? assignment.event_status === "active" : assignment.meeting_status === "published";
+    const targetDate = String(assignment.event_starts_at || assignment.meeting_date || "").slice(0, 10);
+    if (!targetStatusOk || targetDate < new Date().toISOString().slice(0, 10)) {
+      return sendError(res, 403, "You can only respond before a published meeting or active event date passes.");
     }
     if (!["food", "drinks"].includes(assignment.task_type)) {
       return sendError(res, 400, "Only food and drinks assignments accept member contribution details.");
@@ -348,7 +370,7 @@ export async function handleSocialRoutes(req, res, url, context) {
     await notifyAdmins(
       "social_assignment_response",
       "Social assignment response submitted",
-      `${user.fullName} updated ${socialTaskLabel(assignment.task_type).toLowerCase()} details for ${assignment.meeting_title}.`,
+      `${user.fullName} updated ${socialTaskLabel(assignment.task_type).toLowerCase()} details for ${assignment.event_title || assignment.meeting_title}.`,
       "/admin"
     );
 
@@ -382,9 +404,13 @@ export async function handleSocialRoutes(req, res, url, context) {
         SELECT social_assignments.*,
                social_meetings.title AS meeting_title,
                social_meetings.status AS meeting_status,
-               social_meetings.meeting_date
+               social_meetings.meeting_date,
+               events.title AS event_title,
+               events.starts_at AS event_starts_at,
+               events.status AS event_status
         FROM social_assignments
-        JOIN social_meetings ON social_meetings.id = social_assignments.meeting_id
+        LEFT JOIN social_meetings ON social_meetings.id = social_assignments.meeting_id
+        LEFT JOIN events ON events.id = social_assignments.event_id
         WHERE social_assignments.id = $1
         LIMIT 1
       `,
@@ -400,8 +426,10 @@ export async function handleSocialRoutes(req, res, url, context) {
     if (assignment.status !== "assigned") {
       return sendError(res, 400, "Only active assignments can request funds.");
     }
-    if (assignment.meeting_status !== "published" || String(assignment.meeting_date).slice(0, 10) < new Date().toISOString().slice(0, 10)) {
-      return sendError(res, 403, "You can only request funds before a published meeting date passes.");
+    const targetStatusOk = assignment.event_id ? assignment.event_status === "active" : assignment.meeting_status === "published";
+    const targetDate = String(assignment.event_starts_at || assignment.meeting_date || "").slice(0, 10);
+    if (!targetStatusOk || targetDate < new Date().toISOString().slice(0, 10)) {
+      return sendError(res, 403, "You can only request funds before a published meeting or active event date passes.");
     }
     if (!["food", "drinks"].includes(assignment.task_type)) {
       return sendError(res, 400, "Only food and drinks assignments can request preparation funds.");
@@ -409,17 +437,17 @@ export async function handleSocialRoutes(req, res, url, context) {
 
     const { rows } = await query(
       `
-        INSERT INTO social_fund_requests (meeting_id, assignment_id, requested_by, item_description, amount_cents, reason)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        INSERT INTO social_fund_requests (meeting_id, event_id, assignment_id, requested_by, item_description, amount_cents, reason)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING id
       `,
-      [assignment.meeting_id, assignmentId, user.id, itemDescription, amountCents, reason]
+      [assignment.meeting_id, assignment.event_id, assignmentId, user.id, itemDescription, amountCents, reason]
     );
 
     await notifyAdmins(
       "social_fund_request",
       "New social fund request",
-      `${user.fullName} requested $${centsToDollarAmount(amountCents)} for ${itemDescription} for ${assignment.meeting_title}.`,
+      `${user.fullName} requested $${centsToDollarAmount(amountCents)} for ${itemDescription} for ${assignment.event_title || assignment.meeting_title}.`,
       "/admin"
     );
 
@@ -676,10 +704,14 @@ export async function handleSocialRoutes(req, res, url, context) {
     const payload = await readJson(req);
     const resourceId = parseId(payload.resourceId);
     const meetingId = payload.meetingId ? parseId(payload.meetingId) : null;
+    const eventId = payload.eventId ? parseId(payload.eventId) : null;
     const quantity = Math.max(1, Math.trunc(Number(payload.quantity || 1)));
 
-    if (!meetingId) {
-      return sendError(res, 400, "Choose the meeting tied to your assigned task before requesting resources.");
+    if (!meetingId && !eventId) {
+      return sendError(res, 400, "Choose the meeting or event tied to your assigned task before requesting resources.");
+    }
+    if (meetingId && eventId) {
+      return sendError(res, 400, "Choose either a meeting or an event, not both.");
     }
 
     const resourceResult = await query("SELECT id, name, status FROM social_resources WHERE id = $1 AND status = 'active'", [resourceId]);
@@ -691,29 +723,42 @@ export async function handleSocialRoutes(req, res, url, context) {
       `
         SELECT social_assignments.id
         FROM social_assignments
-        JOIN social_meetings ON social_meetings.id = social_assignments.meeting_id
-        WHERE social_assignments.meeting_id = $1
-          AND social_assignments.user_id = $2
+        LEFT JOIN social_meetings ON social_meetings.id = social_assignments.meeting_id
+        LEFT JOIN events ON events.id = social_assignments.event_id
+        WHERE social_assignments.user_id = $3
           AND social_assignments.status = 'assigned'
           AND social_assignments.archived_at IS NULL
-          AND social_meetings.status = 'published'
-          AND social_meetings.meeting_date >= CURRENT_DATE
+          AND (
+            (
+              $1::bigint IS NOT NULL
+              AND social_assignments.meeting_id = $1
+              AND social_meetings.status = 'published'
+              AND social_meetings.meeting_date >= CURRENT_DATE
+            )
+            OR (
+              $2::bigint IS NOT NULL
+              AND social_assignments.event_id = $2
+              AND events.status = 'active'
+              AND COALESCE(events.ends_at, events.starts_at) >= now()
+            )
+          )
         LIMIT 1
       `,
-      [meetingId, user.id]
+      [meetingId, eventId, user.id]
     );
     if (assignmentResult.rows.length === 0) {
-      return sendError(res, 403, "You can only request resources for an active published meeting where you have an assigned task.");
+      return sendError(res, 403, "You can only request resources for an active meeting or event where you have an assigned task.");
     }
 
     const { rows } = await query(
       `
-        INSERT INTO social_resource_requests (meeting_id, resource_id, requested_by, quantity, needed_date, return_date, note)
-        VALUES (NULLIF($1, 0), $2, $3, $4, NULLIF($5, '')::date, NULLIF($6, '')::date, $7)
+        INSERT INTO social_resource_requests (meeting_id, event_id, resource_id, requested_by, quantity, needed_date, return_date, note)
+        VALUES ($1, $2, $3, $4, $5, NULLIF($6, '')::date, NULLIF($7, '')::date, $8)
         RETURNING *
       `,
       [
-        meetingId || 0,
+        meetingId,
+        eventId,
         resourceId,
         user.id,
         quantity,
@@ -726,7 +771,7 @@ export async function handleSocialRoutes(req, res, url, context) {
     await notifyAdmins(
       "social_resource_request",
       "New resource request",
-      `${user.fullName} requested ${quantity} ${resourceResult.rows[0].name} for a social meeting.`,
+      `${user.fullName} requested ${quantity} ${resourceResult.rows[0].name} for ${eventId ? "an event" : "a social meeting"}.`,
       "/admin"
     );
 
