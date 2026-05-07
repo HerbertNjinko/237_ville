@@ -58,6 +58,8 @@ async function loadDashboard() {
   } else if (!isAdminPortalUser(state.user)) {
     state.portalMode = "member";
   }
+  applyDashboardRouteFromHash();
+  updateDashboardRoute({ replace: true });
   if (isAdminPortalUser(state.user) && !state.admin) {
     await loadAdminSummary();
   }

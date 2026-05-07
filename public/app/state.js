@@ -32,6 +32,7 @@ const state = {
     dateTo: ""
   },
   portalMode: "member",
+  sidebarOpen: true,
   view: "overview",
   authMode: "home",
   message: "",
@@ -108,6 +109,48 @@ function canEditAdminView(view, user = state.user) {
   if (role === "treasurer") return ["announcements", "questions", "events", "votes", "payments", "payment-details", "expenditures", "budgets", "notifications"].includes(view);
   if (role === "social") return ["announcements", "questions", "events", "social"].includes(view);
   return false;
+}
+
+function currentPortalViews() {
+  return isAdminPortalMode()
+    ? adminViews.filter(([key]) => canAccessAdminView(key))
+    : memberViews;
+}
+
+function routePortalSegment() {
+  return isAdminPortalMode() ? "staff" : "member";
+}
+
+function dashboardRouteFor(view = state.view) {
+  return `#/${routePortalSegment()}/${encodeURIComponent(view)}`;
+}
+
+function updateDashboardRoute({ replace = false } = {}) {
+  if (!state.user || state.data?.onboarding) return;
+  const nextHash = dashboardRouteFor();
+  if (window.location.hash === nextHash) return;
+  window.history[replace ? "replaceState" : "pushState"](null, "", nextHash);
+}
+
+function applyDashboardRouteFromHash() {
+  if (!state.user || !window.location.hash) return false;
+
+  const match = window.location.hash.match(/^#\/(member|staff|admin)\/([A-Za-z0-9_-]+)$/);
+  if (!match) return false;
+
+  const requestedMode = match[1] === "member" ? "member" : "admin";
+  if (requestedMode === "admin" && isAdminPortalUser()) {
+    state.portalMode = "admin";
+  } else if (requestedMode === "member" && hasMemberPortal()) {
+    state.portalMode = "member";
+  } else if (!hasMemberPortal() && isAdminPortalUser()) {
+    state.portalMode = "admin";
+  }
+
+  const requestedView = decodeURIComponent(match[2]);
+  const allowedViews = currentPortalViews().map(([key]) => key);
+  state.view = allowedViews.includes(requestedView) ? requestedView : "overview";
+  return true;
 }
 
 function escapeHtml(value = "") {

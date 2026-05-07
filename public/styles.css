@@ -412,6 +412,18 @@ a {
   grid-template-columns: 260px minmax(0, 1fr);
 }
 
+.dashboard-layout.menu-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.dashboard-layout.menu-collapsed .sidebar {
+  display: none;
+}
+
+.sidebar-backdrop {
+  display: none;
+}
+
 .sidebar {
   background: #111827;
   color: white;
@@ -496,6 +508,33 @@ a {
   gap: 16px;
   align-items: center;
   margin-bottom: 20px;
+}
+
+.topbar-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.menu-toggle {
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  display: inline-grid;
+  place-content: center;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+}
+
+.menu-toggle span {
+  display: block;
+  width: 18px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--ink);
 }
 
 .topbar h2 {
@@ -1043,8 +1082,23 @@ th {
     grid-template-columns: 1fr;
   }
 
-  .sidebar {
-    position: static;
+  .dashboard-layout.menu-open .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 30;
+    width: min(300px, 86vw);
+    overflow-y: auto;
+    box-shadow: 18px 0 40px rgba(17, 24, 39, 0.25);
+  }
+
+  .dashboard-layout.menu-open .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    background: rgba(17, 24, 39, 0.42);
+    border: 0;
+    padding: 0;
   }
 
   .side-nav {

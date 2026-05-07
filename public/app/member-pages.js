@@ -1,12 +1,13 @@
 function renderShell() {
   const adminMode = isAdminPortalMode();
-  const views = adminMode ? adminViews.filter(([key]) => canAccessAdminView(key)) : memberViews;
+  const views = currentPortalViews();
   const currentTitle = views.find(([key]) => key === state.view)?.[1] || "Overview";
   const unread = (state.data.notifications || []).filter((notification) => !notification.readAt).length;
   const portalLabel = adminMode ? `${effectiveAdminRole()} portal` : "member portal";
 
   app.innerHTML = `
-    <div class="dashboard-layout">
+    <div class="dashboard-layout ${state.sidebarOpen ? "menu-open" : "menu-collapsed"}">
+      ${state.sidebarOpen ? `<button class="sidebar-backdrop" data-click="toggle-menu" type="button" aria-label="Close menu"></button>` : ""}
       <aside class="sidebar">
         <div class="brand-row">
           <img src="${companyLogoSrc}" alt="237 Ville">
@@ -27,7 +28,7 @@ function renderShell() {
           ${views
             .map(
               ([key, label]) => `
-                <button class="nav-button ${state.view === key ? "active" : ""}" data-view="${key}" type="button">
+                <button class="nav-button ${state.view === key ? "active" : ""}" data-view="${key}" type="button" aria-current="${state.view === key ? "page" : "false"}">
                   ${escapeHtml(label)}
                 </button>
               `
@@ -42,9 +43,16 @@ function renderShell() {
       </aside>
       <main class="main-panel">
         <header class="topbar">
-          <div>
-            <h2>${escapeHtml(currentTitle)}</h2>
-            <p>${escapeHtml(topbarSubtitle())}</p>
+          <div class="topbar-title">
+            <button class="menu-toggle" data-click="toggle-menu" type="button" aria-label="${state.sidebarOpen ? "Hide menu" : "Open menu"}" aria-expanded="${state.sidebarOpen ? "true" : "false"}">
+              <span></span>
+              <span></span>
+              <span></span>
+            </button>
+            <div>
+              <h2>${escapeHtml(currentTitle)}</h2>
+              <p>${escapeHtml(topbarSubtitle())}</p>
+            </div>
           </div>
           <button class="ghost-button" data-click="refresh" type="button">Refresh</button>
         </header>

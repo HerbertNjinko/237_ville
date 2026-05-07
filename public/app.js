@@ -2,6 +2,18 @@
 document.addEventListener("submit", handleSubmit);
 document.addEventListener("change", handleChange);
 document.addEventListener("click", handleClick);
+window.addEventListener("hashchange", async () => {
+  if (!state.user || !state.data || state.data.onboarding) return;
+  if (!applyDashboardRouteFromHash()) return;
+  state.sidebarOpen = false;
+  if (isAdminPortalMode() && !state.admin) {
+    await loadAdminSummary();
+  }
+  if (isAdminPortalMode() && state.view === "notifications" && !state.adminNotifications) {
+    await loadAdminNotifications();
+  }
+  render();
+});
 
 (async function bootstrapApp() {
   await loadMe();

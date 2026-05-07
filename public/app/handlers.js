@@ -716,10 +716,12 @@ async function handleClick(event) {
   const viewButton = event.target.closest("[data-view]");
   if (viewButton) {
     state.view = viewButton.dataset.view;
-    if (isAdminPortalUser(state.user) && !state.admin) {
+    state.sidebarOpen = false;
+    updateDashboardRoute();
+    if (isAdminPortalMode() && !state.admin) {
       await loadAdminSummary();
     }
-    if (state.view === "notifications") {
+    if (isAdminPortalMode() && state.view === "notifications") {
       if (!state.admin) await loadAdminSummary();
       if (!state.adminNotifications) await loadAdminNotifications();
     }
@@ -740,6 +742,7 @@ async function handleClick(event) {
       state.admin = null;
       state.adminNotifications = null;
       state.portalMode = "member";
+      state.sidebarOpen = true;
       state.authMode = "home";
       await loadPublicPaymentDetails();
       await loadPublicAbout();
@@ -754,9 +757,17 @@ async function handleClick(event) {
       return;
     }
 
+    if (action === "toggle-menu") {
+      state.sidebarOpen = !state.sidebarOpen;
+      render();
+      return;
+    }
+
     if (action === "switch-portal") {
       state.portalMode = button.dataset.portalMode === "admin" ? "admin" : "member";
       state.view = "overview";
+      state.sidebarOpen = false;
+      updateDashboardRoute();
       if (state.portalMode === "admin" && !state.admin) {
         await loadAdminSummary();
       }
