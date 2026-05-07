@@ -60,9 +60,37 @@ const adminViews = [
   ["payments", "Dues and donations"],
   ["payment-details", "Payment details"],
   ["expenditures", "Expenditures"],
+  ["budgets", "Budgets"],
   ["profile", "Members / Profile"],
   ["notifications", "Notifications"]
 ];
+
+const adminRolePermissions = {
+  admin: new Set(["overview", "about", "announcements", "questions", "events", "social", "votes", "payments", "payment-details", "expenditures", "budgets", "profile", "notifications"]),
+  secretary: new Set(["overview", "about", "announcements", "questions", "votes", "profile", "notifications"]),
+  treasurer: new Set(["overview", "announcements", "questions", "events", "votes", "payments", "payment-details", "expenditures", "budgets", "notifications"]),
+  social: new Set(["overview", "announcements", "questions", "events", "social"])
+};
+
+function isFullAdmin(user = state.user) {
+  return user?.role === "admin";
+}
+
+function isAdminPortalUser(user = state.user) {
+  return Boolean(user && adminRolePermissions[user.role]);
+}
+
+function canAccessAdminView(view, user = state.user) {
+  return adminRolePermissions[user?.role]?.has(view) || false;
+}
+
+function canEditAdminView(view, user = state.user) {
+  if (isFullAdmin(user)) return true;
+  if (user?.role === "secretary") return ["about", "announcements", "questions", "votes"].includes(view);
+  if (user?.role === "treasurer") return ["announcements", "questions", "events", "votes", "payments", "payment-details", "expenditures", "budgets", "notifications"].includes(view);
+  if (user?.role === "social") return ["announcements", "questions", "events", "social"].includes(view);
+  return false;
+}
 
 function escapeHtml(value = "") {
   return String(value)
@@ -235,18 +263,18 @@ async function loadDashboard() {
   const data = await api("/api/dashboard");
   state.user = data.user;
   state.data = data;
-  if (state.user.role === "admin" && !state.admin) {
+  if (isAdminPortalUser(state.user) && !state.admin) {
     await loadAdminSummary();
   }
 }
 
 async function loadAdminSummary() {
-  if (!state.user || state.user.role !== "admin") return;
+  if (!isAdminPortalUser(state.user)) return;
   state.admin = await api("/api/admin/summary");
 }
 
 async function loadAdminNotifications() {
-  if (!state.user || state.user.role !== "admin") return;
+  if (!canAccessAdminView("notifications")) return;
   const params = new URLSearchParams();
   if (state.notificationFilters.userId) params.set("userId", state.notificationFilters.userId);
   if (state.notificationFilters.dateFrom) params.set("dateFrom", state.notificationFilters.dateFrom);
@@ -758,7 +786,7 @@ function renderOnboardingStep(user, policy, feePayment, feeCents) {
 }
 
 function renderShell() {
-  const views = state.user.role === "admin" ? adminViews : memberViews;
+  const views = isAdminPortalUser() ? adminViews.filter(([key]) => canAccessAdminView(key)) : memberViews;
   const currentTitle = views.find(([key]) => key === state.view)?.[1] || "Overview";
   const unread = (state.data.notifications || []).filter((notification) => !notification.readAt).length;
 
@@ -805,7 +833,7 @@ function renderShell() {
 }
 
 function topbarSubtitle() {
-  if (state.user?.role === "admin") {
+  if (isAdminPortalUser()) {
     const adminMap = {
       overview: "Backend statistics across members, money, content, events, votes, and notifications.",
       about: "Manage the public home articles, About page content, and leadership position images.",
@@ -817,6 +845,7 @@ function topbarSubtitle() {
       payments: "Track dues, donations, pending payments, and members who have not paid dues.",
       "payment-details": "Update the payment handles and instructions shown during payment submission.",
       expenditures: "Enter expenses and publish financial records for member transparency.",
+      budgets: "Assign department budgets and publish budget spending for member transparency.",
       profile: "Update member and admin account details.",
       notifications: "Filter and export notification records for audit."
     };
@@ -830,7 +859,7 @@ function topbarSubtitle() {
     events: "Upcoming community meetings, programs, and planned events.",
     social: "Request organization resources for meetings where you have an assigned task.",
     questions: "Member questions approved for community discussion.",
-    financials: "Published donations and organization expenditures.",
+    financials: "Organization balance, published donations, expenditures, and department budgets.",
     payments: "Record dues and donations for admin review.",
     profile: "Update your member account details.",
     admin: "Publish content, plan events, manage ballots, and review member activity.",
@@ -840,7 +869,10 @@ function topbarSubtitle() {
 }
 
 function renderView() {
-  if (state.user.role === "admin") {
+  if (isAdminPortalUser()) {
+    if (!canAccessAdminView(state.view)) {
+      state.view = "overview";
+    }
     switch (state.view) {
       case "about":
         return renderAdminAbout();
@@ -860,6 +892,8 @@ function renderView() {
         return renderAdminPaymentDetails();
       case "expenditures":
         return renderAdminExpenditures();
+      case "budgets":
+        return renderAdminBudgets();
       case "profile":
         return renderAdminProfiles();
       case "notifications":
@@ -944,7 +978,7 @@ function renderOverview() {
                 <p>Published updates for your account.</p>
               </div>
             </div>
-            ${state.user.role === "admin" ? renderNotificationCleanupForm("overview") : ""}
+            ${canEditAdminView("notifications") ? renderNotificationCleanupForm("overview") : ""}
             ${renderNotificationList(state.data.notifications || [])}
           </div>
         </div>
@@ -1008,16 +1042,29 @@ function renderFinancials() {
   const financials = state.data.financials || {
     donations: [],
     expenditures: [],
-    summary: { donationTotalCents: 0, expenditureTotalCents: 0, publishedNetCents: 0 }
+    budgets: [],
+    assignedBudgets: [],
+    summary: {
+      donationTotalCents: 0,
+      expenditureTotalCents: 0,
+      publishedBudgetAllocationCents: 0,
+      publishedBudgetExpenseTotalCents: 0,
+      publishedNetCents: 0,
+      accountBalanceCents: 0
+    }
   };
+  const publishedExpenseCents = Number(financials.summary.expenditureTotalCents || 0);
+  const assignedBudgets = financials.assignedBudgets || [];
 
   return `
     <section class="content-grid">
       <div class="metric-grid">
-        <div class="metric"><span>Published donations</span><strong>${formatMoney(financials.summary.donationTotalCents)}</strong></div>
-        <div class="metric"><span>Published expenses</span><strong>${formatMoney(financials.summary.expenditureTotalCents)}</strong></div>
+        <div class="metric"><span>Account balance</span><strong>${formatMoney(financials.summary.accountBalanceCents || 0)}</strong></div>
+        <div class="metric"><span>Published donations</span><strong>${formatMoney(financials.summary.donationTotalCents || 0)}</strong></div>
+        <div class="metric"><span>Published expenses</span><strong>${formatMoney(publishedExpenseCents)}</strong></div>
+        <div class="metric"><span>Budget allocations</span><strong>${formatMoney(financials.summary.publishedBudgetAllocationCents || 0)}</strong></div>
         <div class="metric"><span>Published net</span><strong>${formatMoney(financials.summary.publishedNetCents)}</strong></div>
-        <div class="metric"><span>Records</span><strong>${(financials.donations || []).length + (financials.expenditures || []).length}</strong></div>
+        <div class="metric"><span>Department budgets</span><strong>${(financials.budgets || []).length}</strong></div>
       </div>
       <section class="two-column">
         <div class="panel">
@@ -1038,6 +1085,30 @@ function renderFinancials() {
           </div>
           ${renderPublishedExpenditureList(financials.expenditures || [])}
         </div>
+      </section>
+      <section class="two-column">
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <h3>Department budgets</h3>
+              <p>Published department allocations and itemized spending.</p>
+            </div>
+          </div>
+          ${renderDepartmentBudgetTransparencyList(financials.budgets || [])}
+        </div>
+        ${
+          assignedBudgets.length
+            ? `<aside class="panel">
+                <div class="panel-header">
+                  <div>
+                    <h3>Assigned budget expenses</h3>
+                    <p>Submit expenses for budgets assigned to you for admin review.</p>
+                  </div>
+                </div>
+                ${renderAssignedBudgetExpenseForms(assignedBudgets)}
+              </aside>`
+            : ""
+        }
       </section>
     </section>
   `;
@@ -1098,6 +1169,124 @@ function renderPublishedExpenditureList(expenditures) {
         .join("")}
     </div>
   `;
+}
+
+function formatBudgetPeriod(budget) {
+  const dates = [
+    budget.periodStart ? formatDate(budget.periodStart, { dateOnly: true }) : "",
+    budget.periodEnd ? formatDate(budget.periodEnd, { dateOnly: true }) : ""
+  ].filter(Boolean);
+  return dates.length ? dates.join(" - ") : "No period set";
+}
+
+function renderDepartmentBudgetTransparencyList(budgets) {
+  if (!budgets.length) return emptyState("No department budgets have been published.");
+
+  return `
+    <div class="item-list">
+      ${budgets
+        .map((budget) => {
+          const publishedExpenses = (budget.expenses || []).filter((expense) => expense.status === "published");
+          return `
+            <article class="item-card">
+              <div class="panel-header">
+                <div>
+                  <h4>${escapeHtml(budget.departmentName)} · ${escapeHtml(budget.title)}</h4>
+                  <p>${escapeHtml(budget.purpose || "")}</p>
+                </div>
+                <strong>${formatMoney(budget.amountCents)}</strong>
+              </div>
+              <div class="item-meta">
+                <span>${formatBudgetPeriod(budget)}</span>
+                <span>Spent ${formatMoney(budget.spentCents || 0)}</span>
+                <span>Remaining ${formatMoney(budget.remainingCents || 0)}</span>
+              </div>
+              ${renderBudgetExpenseList(publishedExpenses, { emptyText: "No budget expenses have been published yet." })}
+            </article>
+          `;
+        })
+        .join("")}
+    </div>
+  `;
+}
+
+function renderBudgetExpenseList(expenses, { adminMode = false, emptyText = "No budget expenses yet." } = {}) {
+  if (!expenses.length) return emptyState(emptyText);
+
+  return `
+    <div class="item-list compact-list">
+      ${expenses
+        .map(
+          (expense) => `
+            <div class="comment">
+              <div class="panel-header">
+                <div>
+                  <strong>${escapeHtml(expense.title)}</strong>
+                  <p>${escapeHtml(expense.note || "")}</p>
+                </div>
+                <strong>${formatMoney(expense.amountCents)}</strong>
+              </div>
+              <div class="item-meta">
+                ${expense.vendor ? `<span>${escapeHtml(expense.vendor)}</span>` : ""}
+                ${expense.createdByName ? `<span>${escapeHtml(expense.createdByName)}</span>` : ""}
+                <span>${formatDate(expense.expenseDate, { dateOnly: true })}</span>
+                <span>${escapeHtml(statusLabel(expense.status))}</span>
+              </div>
+              ${
+                adminMode && expense.status !== "published"
+                  ? `<button class="secondary-button" data-click="budget-expense-publish" data-expense-id="${expense.id}" type="button">Publish expense</button>`
+                  : ""
+              }
+            </div>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderAssignedBudgetExpenseForms(budgets) {
+  return budgets
+    .map(
+      (budget) => `
+        <article class="item-card">
+          <div class="panel-header">
+            <div>
+              <h4>${escapeHtml(budget.departmentName)} · ${escapeHtml(budget.title)}</h4>
+              <p>Remaining published balance ${formatMoney(budget.remainingCents || 0)}</p>
+            </div>
+            ${statusPill(budget.status)}
+          </div>
+          <form class="form-stack compact-form" data-action="member-budget-expense" data-budget-id="${budget.id}">
+            <label class="field">
+              <span>Expense title</span>
+              <input name="title" required>
+            </label>
+            <div class="form-grid">
+              <label class="field">
+                <span>Amount</span>
+                <input name="amount" type="number" min="0.01" step="0.01" required>
+              </label>
+              <label class="field">
+                <span>Expense date</span>
+                <input name="expenseDate" type="date">
+              </label>
+            </div>
+            <label class="field">
+              <span>Vendor</span>
+              <input name="vendor">
+            </label>
+            <label class="field">
+              <span>Notes</span>
+              <textarea name="note"></textarea>
+            </label>
+            <button class="secondary-button" type="submit">Submit expense</button>
+          </form>
+          ${renderBudgetExpenseList(budget.expenses || [], { emptyText: "No expenses submitted for this budget yet." })}
+        </article>
+      `
+    )
+    .join("");
 }
 
 function renderVotes() {
@@ -1531,7 +1720,7 @@ function renderProfile() {
 }
 
 function requireAdminData(label = "Loading admin tools...") {
-  if (state.user.role !== "admin") {
+  if (!isAdminPortalUser()) {
     return emptyState("Admin access is required.");
   }
 
@@ -1555,6 +1744,7 @@ function adminStats() {
     donationTotalCents: 0,
     pendingPaymentTotalCents: 0,
     expenditureTotalCents: 0,
+    budgetAllocationCents: 0,
     accountBalanceCents: 0
   };
   const activeMembers = members.filter((member) => member.membershipStatus === "active");
@@ -1591,21 +1781,30 @@ function renderAdminOverview() {
 
   const stats = adminStats();
   const unread = (state.data.notifications || []).filter((notification) => !notification.readAt);
+  const showFinanceOverview = Boolean(state.admin?.financialSummary);
 
   return `
     <section class="admin-section">
-      <div class="metric-grid">
-        <div class="metric"><span>Account balance</span><strong>${formatMoney(stats.financialSummary.accountBalanceCents)}</strong></div>
-        <div class="metric"><span>Total received</span><strong>${formatMoney(stats.financialSummary.receivedTotalCents)}</strong></div>
-        <div class="metric"><span>Total expenses</span><strong>${formatMoney(stats.financialSummary.expenditureTotalCents)}</strong></div>
-        <div class="metric"><span>Pending payments</span><strong>${formatMoney(stats.financialSummary.pendingPaymentTotalCents)}</strong></div>
-      </div>
-      <div class="metric-grid">
-        <div class="metric"><span>Total members</span><strong>${stats.members.length}</strong></div>
-        <div class="metric"><span>Pending approvals</span><strong>${stats.pendingApprovals.length}</strong></div>
-        <div class="metric"><span>Dues paid</span><strong>${stats.duesPaidIds.size}</strong></div>
-        <div class="metric"><span>Dues unpaid</span><strong>${Math.max(stats.activeMembers.length - stats.duesPaidIds.size, 0)}</strong></div>
-      </div>
+      ${
+        showFinanceOverview
+          ? `<div class="metric-grid">
+              <div class="metric"><span>Account balance</span><strong>${formatMoney(stats.financialSummary.accountBalanceCents)}</strong></div>
+              <div class="metric"><span>Total received</span><strong>${formatMoney(stats.financialSummary.receivedTotalCents)}</strong></div>
+              <div class="metric"><span>Total expenses</span><strong>${formatMoney(stats.financialSummary.expenditureTotalCents)}</strong></div>
+              <div class="metric"><span>Active budget allocation</span><strong>${formatMoney(stats.financialSummary.budgetAllocationCents || 0)}</strong></div>
+            </div>`
+          : ""
+      }
+      ${
+        stats.members.length
+          ? `<div class="metric-grid">
+              <div class="metric"><span>Total members</span><strong>${stats.members.length}</strong></div>
+              <div class="metric"><span>Pending approvals</span><strong>${stats.pendingApprovals.length}</strong></div>
+              <div class="metric"><span>Dues paid</span><strong>${stats.duesPaidIds.size}</strong></div>
+              <div class="metric"><span>Dues unpaid</span><strong>${Math.max(stats.activeMembers.length - stats.duesPaidIds.size, 0)}</strong></div>
+            </div>`
+          : ""
+      }
       <div class="metric-grid">
         <div class="metric"><span>Pending questions</span><strong>${stats.pendingQuestions.length}</strong></div>
         <div class="metric"><span>Upcoming events</span><strong>${stats.upcomingEvents.length}</strong></div>
@@ -1614,45 +1813,61 @@ function renderAdminOverview() {
       </div>
       <section class="two-column">
         <div class="content-grid">
-          <div class="panel">
-            <div class="panel-header">
-              <div>
-                <h3>Account approvals</h3>
-                <p>Validate member applications and ID cards.</p>
-              </div>
-            </div>
-            ${renderPendingApprovals(stats.pendingApprovals)}
-          </div>
-          <div class="panel">
-            <div class="panel-header">
-              <div>
-                <h3>Payment review</h3>
-                <p>Pending dues, donations, and registration fees.</p>
-              </div>
-            </div>
-            ${renderPaymentTable(stats.payments.filter((payment) => payment.status === "pending").slice(0, 8), true)}
-          </div>
+          ${
+            canAccessAdminView("profile")
+              ? `<div class="panel">
+                  <div class="panel-header">
+                    <div>
+                      <h3>Account approvals</h3>
+                      <p>Validate member applications and ID cards.</p>
+                    </div>
+                  </div>
+                  ${renderPendingApprovals(stats.pendingApprovals)}
+                </div>`
+              : ""
+          }
+          ${
+            canAccessAdminView("payments")
+              ? `<div class="panel">
+                  <div class="panel-header">
+                    <div>
+                      <h3>Payment review</h3>
+                      <p>Pending dues, donations, and registration fees.</p>
+                    </div>
+                  </div>
+                  ${renderPaymentTable(stats.payments.filter((payment) => payment.status === "pending").slice(0, 8), true)}
+                </div>`
+              : ""
+          }
         </div>
         <div class="content-grid">
-          <div class="panel">
-            <div class="panel-header">
-              <div>
-                <h3>Notifications</h3>
-                <p>Recent admin notices and cleanup.</p>
-              </div>
-            </div>
-            ${renderNotificationCleanupForm("overview")}
-            ${renderNotificationList(state.data.notifications || [])}
-          </div>
-          <div class="panel">
-            <div class="panel-header">
-              <div>
-                <h3>Upcoming events</h3>
-                <p>Next organization dates.</p>
-              </div>
-            </div>
-            ${renderEventList(stats.upcomingEvents.slice(0, 5))}
-          </div>
+          ${
+            canAccessAdminView("notifications")
+              ? `<div class="panel">
+                  <div class="panel-header">
+                    <div>
+                      <h3>Notifications</h3>
+                      <p>Recent admin notices and cleanup.</p>
+                    </div>
+                  </div>
+                  ${renderNotificationCleanupForm("overview")}
+                  ${renderNotificationList(state.data.notifications || [])}
+                </div>`
+              : ""
+          }
+          ${
+            canAccessAdminView("events")
+              ? `<div class="panel">
+                  <div class="panel-header">
+                    <div>
+                      <h3>Upcoming events</h3>
+                      <p>Next organization dates.</p>
+                    </div>
+                  </div>
+                  ${renderEventList(stats.upcomingEvents.slice(0, 5))}
+                </div>`
+              : ""
+          }
         </div>
       </section>
     </section>
@@ -1806,7 +2021,7 @@ function renderAboutPublicationManager(articles) {
       <div class="filter-actions">
         <button class="secondary-button" type="submit">Apply</button>
         <button class="ghost-button" data-click="reset-about-article-filters" type="button">Reset</button>
-        <button class="danger-button" data-click="cleanup-hidden-about-articles" type="button">Drop hidden older than 30 days</button>
+        ${isFullAdmin() ? `<button class="danger-button" data-click="cleanup-hidden-about-articles" type="button">Drop hidden older than 30 days</button>` : ""}
       </div>
     </form>
     ${renderAdminPublicArticleList(filteredAboutArticles(articles))}
@@ -1874,7 +2089,7 @@ function renderAdminPublicArticleCard(article) {
           <button class="ghost-button" data-click="about-article-status" data-article-id="${article.id}" data-status="${nextStatus}" type="button">
             ${article.status === "hidden" ? "Publish" : "Hide"}
           </button>
-          <button class="danger-button" data-click="delete-about-article" data-article-id="${article.id}" type="button">Delete</button>
+          ${isFullAdmin() ? `<button class="danger-button" data-click="delete-about-article" data-article-id="${article.id}" type="button">Delete</button>` : ""}
         </div>
       </div>
     </article>
@@ -1909,7 +2124,7 @@ function renderLeadershipPositionForm(position = null) {
                 <select name="status">
                   <option value="published" ${position.status === "published" ? "selected" : ""}>Published</option>
                   <option value="hidden" ${position.status === "hidden" ? "selected" : ""}>Hidden</option>
-                  <option value="archived" ${position.status === "archived" ? "selected" : ""}>Archived</option>
+                  ${isFullAdmin() ? `<option value="archived" ${position.status === "archived" ? "selected" : ""}>Archived</option>` : ""}
                 </select>
               </label>`
             : ""
@@ -2030,7 +2245,7 @@ function renderAdminLeadershipCard(position) {
               : `<button class="ghost-button" data-click="leadership-position-status" data-position-id="${position.id}" data-status="published" type="button">Publish</button>`
           }
           ${
-            position.status === "archived"
+            position.status === "archived" || !isFullAdmin()
               ? ""
               : `<button class="ghost-button" data-click="leadership-position-status" data-position-id="${position.id}" data-status="archived" type="button">Archive</button>`
           }
@@ -2212,7 +2427,9 @@ function renderAdminEventManager(events) {
                   ${
                     event.status === "archived"
                       ? `<span class="muted">Archived ${formatDate(event.archivedAt)}</span>`
-                      : `<button class="secondary-button" data-click="event-archive" data-event-id="${event.id}" type="button">Archive</button>`
+                      : isFullAdmin()
+                        ? `<button class="secondary-button" data-click="event-archive" data-event-id="${event.id}" type="button">Archive</button>`
+                        : ""
                   }
                 </div>
               </form>
@@ -3623,6 +3840,179 @@ function renderAdminExpenditures() {
   `;
 }
 
+function renderAdminBudgets() {
+  const loading = requireAdminData("Loading department budgets...");
+  if (loading) return loading;
+
+  const budgets = state.admin.budgets || [];
+  const budgetExpenses = budgets.flatMap((budget) => budget.expenses || []);
+  const allocatedCents = budgets.reduce((sum, budget) => sum + Number(budget.amountCents || 0), 0);
+  const publishedSpentCents = budgets.reduce((sum, budget) => sum + Number(budget.spentCents || 0), 0);
+  const draftExpenseCents = budgetExpenses
+    .filter((expense) => expense.status !== "published")
+    .reduce((sum, expense) => sum + Number(expense.amountCents || 0), 0);
+
+  return `
+    <section class="content-grid">
+      <div class="metric-grid">
+        <div class="metric"><span>Budget allocated</span><strong>${formatMoney(allocatedCents)}</strong></div>
+        <div class="metric"><span>Published budget spend</span><strong>${formatMoney(publishedSpentCents)}</strong></div>
+        <div class="metric"><span>Pending budget expenses</span><strong>${formatMoney(draftExpenseCents)}</strong></div>
+        <div class="metric"><span>Budget records</span><strong>${budgets.length}</strong></div>
+      </div>
+      <section class="two-column">
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <h3>Department budgets</h3>
+              <p>Assign budgets to departments and publish expense details for members.</p>
+            </div>
+          </div>
+          ${renderAdminDepartmentBudgetList(budgets)}
+        </div>
+        <aside class="panel">
+          <div class="panel-header">
+            <div>
+              <h3>Create department budget</h3>
+              <p>Assign a budget steward when a department member should submit expenses.</p>
+            </div>
+          </div>
+          ${renderDepartmentBudgetForm()}
+        </aside>
+      </section>
+    </section>
+  `;
+}
+
+function renderAdminDepartmentBudgetList(budgets) {
+  if (!budgets.length) return emptyState("No department budgets have been created.");
+
+  return `
+    <div class="item-list">
+      ${budgets.map(renderAdminDepartmentBudgetCard).join("")}
+    </div>
+  `;
+}
+
+function renderAdminDepartmentBudgetCard(budget) {
+  return `
+    <article class="item-card">
+      <div class="panel-header">
+        <div>
+          <h4>${escapeHtml(budget.departmentName)} · ${escapeHtml(budget.title)}</h4>
+          <p>${escapeHtml(budget.purpose || "")}</p>
+        </div>
+        ${statusPill(budget.status)}
+      </div>
+      <div class="item-meta">
+        <span>Allocated ${formatMoney(budget.amountCents)}</span>
+        <span>Published spend ${formatMoney(budget.spentCents || 0)}</span>
+        <span>Remaining ${formatMoney(budget.remainingCents || 0)}</span>
+        <span>${formatBudgetPeriod(budget)}</span>
+        ${budget.assignedToName ? `<span>Steward ${escapeHtml(budget.assignedToName)}</span>` : ""}
+      </div>
+      ${renderDepartmentBudgetForm(budget)}
+      <div class="social-subsection">
+        <div class="panel-header">
+          <div>
+            <h4>Budget expenses</h4>
+            <p>Publish expense records when they are ready for member visibility.</p>
+          </div>
+        </div>
+        ${renderBudgetExpenseList(budget.expenses || [], { adminMode: true })}
+      </div>
+      <div class="social-subsection">
+        <h4>Enter budget expense</h4>
+        ${renderBudgetExpenseForm(budget)}
+      </div>
+    </article>
+  `;
+}
+
+function renderDepartmentBudgetForm(budget = null) {
+  const action = budget ? "update-department-budget" : "create-department-budget";
+  const amountValue = budget ? (Number(budget.amountCents || 0) / 100).toFixed(2) : "";
+
+  return `
+    <form class="form-stack ${budget ? "compact-form" : ""}" data-action="${action}" ${budget ? `data-budget-id="${budget.id}"` : ""}>
+      <label class="field">
+        <span>Department</span>
+        <input name="departmentName" value="${escapeHtml(budget?.departmentName || "")}" placeholder="Social department, events, outreach..." required>
+      </label>
+      <label class="field">
+        <span>Budget title</span>
+        <input name="title" value="${escapeHtml(budget?.title || "")}" required>
+      </label>
+      <div class="form-grid">
+        <label class="field">
+          <span>Amount</span>
+          <input name="amount" type="number" min="0.01" step="0.01" value="${amountValue}" required>
+        </label>
+        <label class="field">
+          <span>Budget steward</span>
+          <select name="assignedTo">${activeMemberOptions(budget?.assignedTo || "")}</select>
+        </label>
+      </div>
+      <div class="form-grid">
+        <label class="field">
+          <span>Period start</span>
+          <input name="periodStart" type="date" value="${dateOnlyValue(budget?.periodStart)}">
+        </label>
+        <label class="field">
+          <span>Period end</span>
+          <input name="periodEnd" type="date" value="${dateOnlyValue(budget?.periodEnd)}">
+        </label>
+      </div>
+      <label class="field">
+        <span>Purpose</span>
+        <textarea name="purpose">${escapeHtml(budget?.purpose || "")}</textarea>
+      </label>
+      <label class="field">
+        <span>Status</span>
+        <select name="status">${socialStatusOptions(["draft", "published", "closed"], budget?.status || "draft")}</select>
+      </label>
+      <button class="primary-button" type="submit">${budget ? "Save budget" : "Create budget"}</button>
+    </form>
+  `;
+}
+
+function renderBudgetExpenseForm(budget) {
+  return `
+    <form class="form-stack compact-form" data-action="admin-budget-expense" data-budget-id="${budget.id}">
+      <label class="field">
+        <span>Expense title</span>
+        <input name="title" required>
+      </label>
+      <div class="form-grid">
+        <label class="field">
+          <span>Amount</span>
+          <input name="amount" type="number" min="0.01" step="0.01" required>
+        </label>
+        <label class="field">
+          <span>Expense date</span>
+          <input name="expenseDate" type="date">
+        </label>
+      </div>
+      <label class="field">
+        <span>Vendor</span>
+        <input name="vendor">
+      </label>
+      <label class="field">
+        <span>Notes</span>
+        <textarea name="note"></textarea>
+      </label>
+      <label class="field">
+        <span>Visibility</span>
+        <select name="status">
+          <option value="draft">Admin only</option>
+          <option value="published">Publish to members</option>
+        </select>
+      </label>
+      <button class="secondary-button" type="submit">Save budget expense</button>
+    </form>
+  `;
+}
+
 function renderExpenditureForm() {
   return `
     <form class="form-stack" data-action="create-expenditure">
@@ -3786,13 +4176,14 @@ function renderPaymentStatusTable(rows) {
 function renderAdminProfiles() {
   const loading = requireAdminData("Loading member profiles...");
   if (loading) return loading;
+  const canManage = isFullAdmin();
 
   return `
     <section class="panel">
       <div class="panel-header">
         <div>
           <h3>Members and users</h3>
-          <p>Update contact details, roles, and account status.</p>
+          <p>${canManage ? "Update contact details, roles, and account status." : "Review member and staff account details."}</p>
         </div>
       </div>
       <form class="form-grid notification-filter-form" data-action="filter-members">
@@ -3818,8 +4209,8 @@ function renderAdminProfiles() {
 }
 
 function renderAdminNotifications() {
-  if (state.user.role !== "admin") {
-    return emptyState("Admin access is required.");
+  if (!canAccessAdminView("notifications")) {
+    return emptyState("Notification access is required.");
   }
 
   if (!state.admin || !state.adminNotifications) {
@@ -3985,23 +4376,27 @@ function renderPendingApprovals(members) {
                     : `<span class="muted">No ID card uploaded.</span>`
                 }
               </div>
-              <form class="form-stack" data-action="approve-member" data-member-id="${member.id}">
-                <label class="field">
-                  <span>Temporary password</span>
-                  <input name="temporaryPassword" type="text" minlength="8" required>
-                </label>
-                <div class="actions">
-                  <button class="ghost-button" data-click="generate-temp-password" type="button">Generate password</button>
-                  <button class="primary-button" type="submit">Approve account</button>
-                </div>
-              </form>
-              <form class="form-stack rejection-form" data-action="reject-member" data-member-id="${member.id}">
-                <label class="field">
-                  <span>Rejection reason</span>
-                  <textarea name="reason" required></textarea>
-                </label>
-                <button class="danger-button" type="submit">Reject account</button>
-              </form>
+              ${
+                isFullAdmin()
+                  ? `<form class="form-stack" data-action="approve-member" data-member-id="${member.id}">
+                      <label class="field">
+                        <span>Temporary password</span>
+                        <input name="temporaryPassword" type="text" minlength="8" required>
+                      </label>
+                      <div class="actions">
+                        <button class="ghost-button" data-click="generate-temp-password" type="button">Generate password</button>
+                        <button class="primary-button" type="submit">Approve account</button>
+                      </div>
+                    </form>
+                    <form class="form-stack rejection-form" data-action="reject-member" data-member-id="${member.id}">
+                      <label class="field">
+                        <span>Rejection reason</span>
+                        <textarea name="reason" required></textarea>
+                      </label>
+                      <button class="danger-button" type="submit">Reject account</button>
+                    </form>`
+                  : `<p class="muted">Only a full admin can approve or reject applications.</p>`
+              }
             </article>
           `
         )
@@ -4026,11 +4421,11 @@ function renderAdminBallots(ballots = state.admin.ballots || []) {
                 </div>
                 ${statusPill(ballot.status)}
               </div>
-              <div class="actions">
-                <button class="secondary-button" data-click="ballot-status" data-ballot-id="${ballot.id}" data-status="open" type="button">Open</button>
-                <button class="danger-button" data-click="ballot-status" data-ballot-id="${ballot.id}" data-status="close" type="button">Close</button>
-                <button class="ghost-button" data-click="ballot-archive" data-ballot-id="${ballot.id}" type="button">Archive</button>
-              </div>
+	              <div class="actions">
+	                <button class="secondary-button" data-click="ballot-status" data-ballot-id="${ballot.id}" data-status="open" type="button">Open</button>
+	                <button class="danger-button" data-click="ballot-status" data-ballot-id="${ballot.id}" data-status="close" type="button">Close</button>
+	                ${isFullAdmin() ? `<button class="ghost-button" data-click="ballot-archive" data-ballot-id="${ballot.id}" type="button">Archive</button>` : ""}
+	              </div>
             </article>
           `
         )
@@ -4042,6 +4437,7 @@ function renderAdminBallots(ballots = state.admin.ballots || []) {
 function renderMembersTable() {
   const members = filteredMembers();
   if (!members.length) return emptyState("No members are registered.");
+  const canManage = isFullAdmin();
 
   return `
     <div class="item-list">
@@ -4056,54 +4452,67 @@ function renderMembersTable() {
                 </div>
                 ${statusPill(member.membershipStatus)}
               </div>
-              <form class="form-stack" data-action="admin-update-member" data-member-id="${member.id}">
-                <div class="form-grid">
-                  <label class="field">
-                    <span>First name</span>
-                    <input name="firstName" value="${escapeHtml(member.firstName)}" required>
-                  </label>
-                  <label class="field">
-                    <span>Last name</span>
-                    <input name="lastName" value="${escapeHtml(member.lastName)}" required>
-                  </label>
-                  <label class="field">
-                    <span>Email</span>
-                    <input name="email" type="email" value="${escapeHtml(member.email)}" required>
-                  </label>
-                  <label class="field">
-                    <span>Phone</span>
-                    <input name="phone" value="${escapeHtml(member.phone)}">
-                  </label>
-                  <label class="field">
-                    <span>City</span>
-                    <input name="city" value="${escapeHtml(member.city)}">
-                  </label>
-                  <label class="field">
-                    <span>State</span>
-                    <input name="state" value="${escapeHtml(member.state)}">
-                  </label>
-                  <label class="field">
-                    <span>Role</span>
-                    <select name="role">
-                      <option value="member" ${member.role === "member" ? "selected" : ""}>Member</option>
-                      <option value="admin" ${member.role === "admin" ? "selected" : ""}>Admin</option>
-                    </select>
-                  </label>
-                  <label class="field">
-                    <span>Account status</span>
-                    <select name="membershipStatus">
-                      ${["pending_approval", "pending_policy", "pending_fee", "active", "inactive", "suspended", "rejected"]
-                        .map((status) => `<option value="${status}" ${member.membershipStatus === status ? "selected" : ""}>${status}</option>`)
-                        .join("")}
-                    </select>
-                  </label>
-                </div>
-                <div class="item-meta">
-                  <span>${member.passwordMustChange ? "Password reset required" : "Password set"}</span>
-                  <span>${member.policyAcceptedAt ? "Policy signed" : "Policy not signed"}</span>
-                </div>
-                <button class="primary-button" type="submit">Save user details</button>
-              </form>
+              ${
+                canManage
+                  ? `<form class="form-stack" data-action="admin-update-member" data-member-id="${member.id}">
+                      <div class="form-grid">
+                        <label class="field">
+                          <span>First name</span>
+                          <input name="firstName" value="${escapeHtml(member.firstName)}" required>
+                        </label>
+                        <label class="field">
+                          <span>Last name</span>
+                          <input name="lastName" value="${escapeHtml(member.lastName)}" required>
+                        </label>
+                        <label class="field">
+                          <span>Email</span>
+                          <input name="email" type="email" value="${escapeHtml(member.email)}" required>
+                        </label>
+                        <label class="field">
+                          <span>Phone</span>
+                          <input name="phone" value="${escapeHtml(member.phone)}">
+                        </label>
+                        <label class="field">
+                          <span>City</span>
+                          <input name="city" value="${escapeHtml(member.city)}">
+                        </label>
+                        <label class="field">
+                          <span>State</span>
+                          <input name="state" value="${escapeHtml(member.state)}">
+                        </label>
+                        <label class="field">
+                          <span>Role</span>
+                          <select name="role">
+                            <option value="member" ${member.role === "member" ? "selected" : ""}>Member</option>
+                            <option value="admin" ${member.role === "admin" ? "selected" : ""}>Admin</option>
+                            <option value="secretary" ${member.role === "secretary" ? "selected" : ""}>Secretary</option>
+                            <option value="treasurer" ${member.role === "treasurer" ? "selected" : ""}>Treasurer</option>
+                            <option value="social" ${member.role === "social" ? "selected" : ""}>Social coordinator</option>
+                          </select>
+                        </label>
+                        <label class="field">
+                          <span>Account status</span>
+                          <select name="membershipStatus">
+                            ${["pending_approval", "pending_policy", "pending_fee", "active", "inactive", "suspended", "rejected"]
+                              .map((status) => `<option value="${status}" ${member.membershipStatus === status ? "selected" : ""}>${status}</option>`)
+                              .join("")}
+                          </select>
+                        </label>
+                      </div>
+                      <div class="item-meta">
+                        <span>${member.passwordMustChange ? "Password reset required" : "Password set"}</span>
+                        <span>${member.policyAcceptedAt ? "Policy signed" : "Policy not signed"}</span>
+                      </div>
+                      <button class="primary-button" type="submit">Save user details</button>
+                    </form>`
+                  : `<div class="item-meta">
+                      <span>${escapeHtml(member.role)}</span>
+                      <span>${escapeHtml(member.phone || "No phone")}</span>
+                      <span>${escapeHtml([member.city, member.state].filter(Boolean).join(", ") || "No location")}</span>
+                      <span>${member.passwordMustChange ? "Password reset required" : "Password set"}</span>
+                      <span>${member.policyAcceptedAt ? "Policy signed" : "Policy not signed"}</span>
+                    </div>`
+              }
             </article>
           `
         )
@@ -4296,7 +4705,7 @@ async function handleSubmit(event) {
       form.reset();
       state.message = payload.contentType === "article" ? "Article submitted for admin review." : "Question submitted for admin review.";
       state.messageType = "ok";
-      await refreshAll({ includeAdmin: state.user.role === "admin" });
+      await refreshAll({ includeAdmin: isAdminPortalUser() });
       return;
     }
 
@@ -4319,7 +4728,7 @@ async function handleSubmit(event) {
       form.reset();
       state.message = "Payment record submitted.";
       state.messageType = "ok";
-      await refreshAll({ includeAdmin: state.user.role === "admin" });
+      await refreshAll({ includeAdmin: isAdminPortalUser() });
       return;
     }
 
@@ -4486,7 +4895,7 @@ async function handleSubmit(event) {
       });
       state.message = "Task response saved.";
       state.messageType = "ok";
-      await refreshAll({ includeAdmin: state.user.role === "admin" });
+      await refreshAll({ includeAdmin: isAdminPortalUser() });
       return;
     }
 
@@ -4499,7 +4908,7 @@ async function handleSubmit(event) {
       form.reset();
       state.message = "Fund request submitted.";
       state.messageType = "ok";
-      await refreshAll({ includeAdmin: state.user.role === "admin" });
+      await refreshAll({ includeAdmin: isAdminPortalUser() });
       return;
     }
 
@@ -4560,7 +4969,7 @@ async function handleSubmit(event) {
       form.reset();
       state.message = "Resource request submitted.";
       state.messageType = "ok";
-      await refreshAll({ includeAdmin: state.user.role === "admin" });
+      await refreshAll({ includeAdmin: isAdminPortalUser() });
       return;
     }
 
@@ -4595,6 +5004,53 @@ async function handleSubmit(event) {
       state.message = payload.status === "published" ? "Expense saved and published." : "Expense saved.";
       state.messageType = "ok";
       await refreshAll({ includeAdmin: true });
+      return;
+    }
+
+    if (action === "create-department-budget") {
+      await api("/api/admin/budgets", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      form.reset();
+      state.message = payload.status === "published" ? "Budget created and published." : "Budget created.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
+    if (action === "update-department-budget") {
+      await api(`/api/admin/budgets/${form.dataset.budgetId}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload)
+      });
+      state.message = "Budget saved.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
+    if (action === "admin-budget-expense") {
+      await api(`/api/admin/budgets/${form.dataset.budgetId}/expenses`, {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      form.reset();
+      state.message = payload.status === "published" ? "Budget expense saved and published." : "Budget expense saved.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
+    if (action === "member-budget-expense") {
+      await api(`/api/budgets/${form.dataset.budgetId}/expenses`, {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      form.reset();
+      state.message = "Budget expense submitted for admin review.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: isAdminPortalUser() });
       return;
     }
 
@@ -4734,7 +5190,7 @@ async function handleClick(event) {
   const viewButton = event.target.closest("[data-view]");
   if (viewButton) {
     state.view = viewButton.dataset.view;
-    if (state.user?.role === "admin" && !state.admin) {
+    if (isAdminPortalUser(state.user) && !state.admin) {
       await loadAdminSummary();
     }
     if (state.view === "notifications") {
@@ -4767,7 +5223,7 @@ async function handleClick(event) {
     }
 
     if (action === "refresh") {
-      await refreshAll({ includeAdmin: state.user?.role === "admin" });
+      await refreshAll({ includeAdmin: isAdminPortalUser(state.user) });
       return;
     }
 
@@ -4931,7 +5387,7 @@ async function handleClick(event) {
       });
       state.message = "Vote recorded.";
       state.messageType = "ok";
-      await refreshAll({ includeAdmin: state.user.role === "admin" });
+      await refreshAll({ includeAdmin: isAdminPortalUser() });
       return;
     }
 
@@ -5038,6 +5494,17 @@ async function handleClick(event) {
         body: "{}"
       });
       state.message = "Expenditure published for members.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
+    if (action === "budget-expense-publish") {
+      await api(`/api/admin/budget-expenses/${button.dataset.expenseId}/publish`, {
+        method: "POST",
+        body: "{}"
+      });
+      state.message = "Budget expense published for members.";
       state.messageType = "ok";
       await refreshAll({ includeAdmin: true });
       return;

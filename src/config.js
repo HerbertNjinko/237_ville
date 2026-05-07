@@ -2,8 +2,24 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
+function normalizeAppUrl(value, fallbackPort) {
+  const fallback = `http://localhost:${fallbackPort}`;
+  const rawUrl = String(value || fallback).trim() || fallback;
+  const withProtocol = /^https?:\/\//i.test(rawUrl) ? rawUrl : `https://${rawUrl}`;
+
+  try {
+    const url = new URL(withProtocol);
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return fallback;
+  }
+}
+
+const port = Number(process.env.PORT || 4173);
+
 export const config = {
-  port: Number(process.env.PORT || 4173),
+  port,
+  appUrl: normalizeAppUrl(process.env.APP_URL, port),
   sessionSecret: process.env.SESSION_SECRET || "dev-session-secret-change-me",
   defaultAdmin: {
     email: (process.env.ADMIN_EMAIL || "admin@237ville.org").toLowerCase(),

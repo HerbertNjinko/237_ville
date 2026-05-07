@@ -21,6 +21,14 @@ import { bootstrapDefaultAdmin, runSchemaMigration } from "./setup.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const publicDir = join(__dirname, "..", "public");
 const paymentMethods = new Set(["cash", "cash_app", "venmo", "zelle", "paypal", "cheque", "bank_account"]);
+const userRoles = new Set(["member", "admin", "secretary", "treasurer", "social"]);
+const staffRoles = new Set(["admin", "secretary", "treasurer", "social"]);
+const rolePermissions = {
+  admin: new Set(["overview", "about", "announcements", "questions", "events", "social", "votes", "payments", "payment-details", "expenditures", "budgets", "profile:view", "profile:manage", "notifications:view", "notifications:clear", "archive", "delete"]),
+  secretary: new Set(["overview", "about", "announcements", "questions", "votes", "profile:view", "notifications:view"]),
+  treasurer: new Set(["overview", "announcements", "questions", "events", "votes", "payments", "payment-details", "expenditures", "budgets", "notifications:view", "notifications:clear"]),
+  social: new Set(["overview", "announcements", "questions", "events", "social"])
+};
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -117,6 +125,21 @@ function requireFields(payload, fields) {
 
 function normalizeEmail(email) {
   return String(email || "").trim().toLowerCase();
+}
+
+function normalizeUserRole(role) {
+  const value = String(role || "").trim().toLowerCase();
+  return userRoles.has(value) ? value : "member";
+}
+
+function isStaffRole(role) {
+  return staffRoles.has(role);
+}
+
+function hasStaffPermission(user, permission) {
+  if (!user || !isStaffRole(user.role)) return false;
+  if (user.role === "admin") return true;
+  return rolePermissions[user.role]?.has(permission) || false;
 }
 
 function parseId(value) {
@@ -341,6 +364,18 @@ async function requireAdmin(req, res) {
   }
   if (user.role !== "admin" || !isPortalReady(user)) {
     sendError(res, 403, "Admin access is required.");
+    return null;
+  }
+  return user;
+}
+
+async function requireStaffPermission(req, res, permission) {
+  const user = await requireActiveUser(req, res);
+  if (!user) {
+    return null;
+  }
+  if (!hasStaffPermission(user, permission)) {
+    sendError(res, 403, "You do not have permission to access this admin tool.");
     return null;
   }
   return user;
@@ -873,6 +908,14 @@ function toExpenditure(row) {
   };
 }
 
+function normalizeDepartmentBudgetStatus(value) {
+  return ["published", "closed"].includes(value) ? value : "draft";
+}
+
+function normalizeDepartmentBudgetExpenseStatus(value) {
+  return value === "published" ? "published" : "draft";
+}
+
 async function listExpenditures({ publishedOnly = false, limit = 100 } = {}) {
   const { rows } = await query(
     `
@@ -886,6 +929,108 @@ async function listExpenditures({ publishedOnly = false, limit = 100 } = {}) {
   );
 
   return rows.map(toExpenditure);
+}
+
+function toDepartmentBudgetExpense(row) {
+  return {
+    id: Number(row.id),
+    budgetId: Number(row.budget_id),
+    budgetTitle: row.budget_title || "",
+    budgetDepartmentName: row.budget_department_name || "",
+    title: row.title,
+    vendor: row.vendor || "",
+    amountCents: Number(row.amount_cents || 0),
+    expenseDate: row.expense_date,
+    note: row.note || "",
+    status: row.status,
+    createdBy: row.created_by ? Number(row.created_by) : null,
+    createdByName: row.created_by_name || "",
+    publishedAt: row.published_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function toDepartmentBudget(row, expenses = []) {
+  const budgetExpenses = expenses.filter((expense) => Number(expense.budgetId) === Number(row.id));
+  const publishedExpenses = budgetExpenses.filter((expense) => expense.status === "published");
+  const publishedSpentCents = publishedExpenses.reduce((sum, expense) => sum + expense.amountCents, 0);
+  const enteredExpenseTotalCents = budgetExpenses.reduce((sum, expense) => sum + expense.amountCents, 0);
+  const amountCents = Number(row.amount_cents || 0);
+
+  return {
+    id: Number(row.id),
+    departmentName: row.department_name || "",
+    title: row.title || "",
+    amountCents,
+    periodStart: row.period_start,
+    periodEnd: row.period_end,
+    purpose: row.purpose || "",
+    assignedTo: row.assigned_to ? Number(row.assigned_to) : null,
+    assignedToName: row.assigned_to_name || "",
+    assignedToEmail: row.assigned_to_email || "",
+    status: row.status,
+    createdBy: row.created_by ? Number(row.created_by) : null,
+    publishedAt: row.published_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    spentCents: publishedSpentCents,
+    enteredExpenseTotalCents,
+    remainingCents: amountCents - publishedSpentCents,
+    expenses: budgetExpenses
+  };
+}
+
+async function listDepartmentBudgets({ includeAll = false, user = null } = {}) {
+  const userId = user?.id ? Number(user.id) : 0;
+  const budgetsResult = await query(
+    `
+      SELECT department_budgets.*,
+             assigned.full_name AS assigned_to_name,
+             assigned.email AS assigned_to_email
+      FROM department_budgets
+      LEFT JOIN users assigned ON assigned.id = department_budgets.assigned_to
+      WHERE ($1::boolean = true OR department_budgets.status = 'published')
+      ORDER BY
+        CASE department_budgets.status
+          WHEN 'published' THEN 1
+          WHEN 'draft' THEN 2
+          ELSE 3
+        END,
+        department_budgets.department_name ASC,
+        department_budgets.created_at DESC
+      LIMIT 150
+    `,
+    [Boolean(includeAll)]
+  );
+
+  const expensesResult = await query(
+    `
+      SELECT department_budget_expenses.*,
+             department_budgets.title AS budget_title,
+             department_budgets.department_name AS budget_department_name,
+             users.full_name AS created_by_name
+      FROM department_budget_expenses
+      JOIN department_budgets ON department_budgets.id = department_budget_expenses.budget_id
+      LEFT JOIN users ON users.id = department_budget_expenses.created_by
+      WHERE (
+        $1::boolean = true
+        OR (
+          department_budgets.status = 'published'
+          AND (
+            department_budget_expenses.status = 'published'
+            OR department_budgets.assigned_to = $2
+          )
+        )
+      )
+      ORDER BY department_budget_expenses.expense_date DESC, department_budget_expenses.created_at DESC
+      LIMIT 500
+    `,
+    [Boolean(includeAll), userId]
+  );
+
+  const expenses = expensesResult.rows.map(toDepartmentBudgetExpense);
+  return budgetsResult.rows.map((row) => toDepartmentBudget(row, expenses));
 }
 
 async function getFinancialSummary() {
@@ -907,11 +1052,32 @@ async function getFinancialSummary() {
       FROM expenditures
     `
   );
+  const budgetExpenses = await query(
+    `
+      SELECT
+        COALESCE(SUM(amount_cents), 0)::bigint AS budget_expense_total_cents,
+        COALESCE(SUM(amount_cents) FILTER (WHERE status = 'published'), 0)::bigint AS published_budget_expense_total_cents
+      FROM department_budget_expenses
+    `
+  );
+  const budgets = await query(
+    `
+      SELECT
+        COALESCE(SUM(amount_cents) FILTER (WHERE status <> 'closed'), 0)::bigint AS budget_allocation_cents,
+        COALESCE(SUM(amount_cents) FILTER (WHERE status = 'published'), 0)::bigint AS published_budget_allocation_cents
+      FROM department_budgets
+    `
+  );
 
   const paymentRow = payments.rows[0] || {};
   const expenditureRow = expenditures.rows[0] || {};
+  const budgetExpenseRow = budgetExpenses.rows[0] || {};
+  const budgetRow = budgets.rows[0] || {};
   const receivedTotalCents = Number(paymentRow.received_total_cents || 0);
   const expenditureTotalCents = Number(expenditureRow.expenditure_total_cents || 0);
+  const budgetExpenseTotalCents = Number(budgetExpenseRow.budget_expense_total_cents || 0);
+  const budgetAllocationCents = Number(budgetRow.budget_allocation_cents || 0);
+  const publishedBudgetAllocationCents = Number(budgetRow.published_budget_allocation_cents || 0);
 
   return {
     receivedTotalCents,
@@ -920,11 +1086,15 @@ async function getFinancialSummary() {
     publishedDonationTotalCents: Number(paymentRow.published_donation_total_cents || 0),
     expenditureTotalCents,
     publishedExpenditureTotalCents: Number(expenditureRow.published_expenditure_total_cents || 0),
-    accountBalanceCents: receivedTotalCents - expenditureTotalCents
+    budgetAllocationCents,
+    publishedBudgetAllocationCents,
+    budgetExpenseTotalCents,
+    publishedBudgetExpenseTotalCents: Number(budgetExpenseRow.published_budget_expense_total_cents || 0),
+    accountBalanceCents: receivedTotalCents - expenditureTotalCents - budgetAllocationCents
   };
 }
 
-async function listPublishedFinancials() {
+async function listPublishedFinancials(user = null) {
   const donations = await query(
     `
       SELECT payments.*, users.full_name, users.email
@@ -939,6 +1109,8 @@ async function listPublishedFinancials() {
   );
 
   const expenditures = await listExpenditures({ publishedOnly: true, limit: 100 });
+  const budgets = await listDepartmentBudgets({ user });
+  const financialSummary = await getFinancialSummary();
   const donationRows = donations.rows.map((row) => ({
     id: Number(row.id),
     donorName: row.full_name || row.donor_name || "Anonymous donor",
@@ -950,14 +1122,25 @@ async function listPublishedFinancials() {
   }));
   const donationTotalCents = donationRows.reduce((sum, item) => sum + item.amountCents, 0);
   const expenditureTotalCents = expenditures.reduce((sum, item) => sum + item.amountCents, 0);
+  const publishedBudgetExpenseTotalCents = budgets.reduce((sum, budget) => sum + budget.spentCents, 0);
+  const publishedBudgetAllocationCents = budgets
+    .filter((budget) => budget.status === "published")
+    .reduce((sum, budget) => sum + budget.amountCents, 0);
 
   return {
     donations: donationRows,
     expenditures,
+    budgets,
+    assignedBudgets: user ? budgets.filter((budget) => Number(budget.assignedTo) === Number(user.id)) : [],
     summary: {
       donationTotalCents,
       expenditureTotalCents,
-      publishedNetCents: donationTotalCents - expenditureTotalCents
+      budgetAllocationCents: financialSummary.budgetAllocationCents,
+      publishedBudgetAllocationCents,
+      publishedBudgetExpenseTotalCents,
+      publishedNetCents: donationTotalCents - expenditureTotalCents - publishedBudgetAllocationCents,
+      receivedTotalCents: financialSummary.receivedTotalCents,
+      accountBalanceCents: financialSummary.accountBalanceCents
     }
   };
 }
@@ -1078,6 +1261,38 @@ async function listMembers() {
     rejectedAt: row.rejected_at,
     rejectionReason: row.rejection_reason || "",
     createdAt: row.created_at
+  }));
+}
+
+function membersForStaffSummary(members, staffUser) {
+  if (staffUser.role === "admin") return members;
+
+  const canViewProfiles = hasStaffPermission(staffUser, "profile:view");
+
+  return members.map((member) => ({
+    id: member.id,
+    email: member.email,
+    firstName: member.firstName,
+    lastName: member.lastName,
+    fullName: member.fullName,
+    phone: canViewProfiles ? member.phone : "",
+    city: canViewProfiles ? member.city : "",
+    state: canViewProfiles ? member.state : "",
+    registrationStatement: "",
+    identityDocument: {
+      name: "",
+      type: "",
+      size: 0,
+      dataUrl: ""
+    },
+    role: member.role,
+    membershipStatus: member.membershipStatus,
+    passwordMustChange: member.passwordMustChange,
+    policyAcceptedAt: member.policyAcceptedAt,
+    approvedAt: member.approvedAt,
+    rejectedAt: member.rejectedAt,
+    rejectionReason: canViewProfiles ? member.rejectionReason : "",
+    createdAt: member.createdAt
   }));
 }
 
@@ -1833,9 +2048,9 @@ async function handleApi(req, res, url) {
       listAnnouncements(10),
       listEvents(10),
       listQuestions(),
-      listBallots(user, { includeDrafts: user.role === "admin" }),
-      listPublishedFinancials(),
-      listSocialCoordinator(user, { includeAll: user.role === "admin" })
+      listBallots(user, { includeDrafts: hasStaffPermission(user, "votes") }),
+      listPublishedFinancials(user),
+      listSocialCoordinator(user, { includeAll: hasStaffPermission(user, "social") })
     ]);
 
     return sendJson(res, 200, {
@@ -1984,7 +2199,7 @@ async function handleApi(req, res, url) {
   }
 
   if (method === "POST" && pathname === "/api/admin/announcements") {
-    const admin = await requireAdmin(req, res);
+    const admin = await requireStaffPermission(req, res, "announcements");
     if (!admin) return;
     const payload = await readJson(req);
     requireFields(payload, ["title", "body"]);
@@ -2019,7 +2234,7 @@ async function handleApi(req, res, url) {
   }
 
   if (method === "POST" && pathname === "/api/admin/events") {
-    const admin = await requireAdmin(req, res);
+    const admin = await requireStaffPermission(req, res, "events");
     if (!admin) return;
     const payload = await readJson(req);
     requireFields(payload, ["title", "startsAt"]);
@@ -2045,7 +2260,7 @@ async function handleApi(req, res, url) {
 
   const eventUpdateMatch = pathname.match(/^\/api\/admin\/events\/(\d+)$/);
   if (method === "PATCH" && eventUpdateMatch) {
-    const admin = await requireAdmin(req, res);
+    const admin = await requireStaffPermission(req, res, "events");
     if (!admin) return;
     const eventId = parseId(eventUpdateMatch[1]);
     const payload = await readJson(req);
@@ -2105,7 +2320,7 @@ async function handleApi(req, res, url) {
   }
 
   if (method === "POST" && pathname === "/api/admin/social/meetings") {
-    const admin = await requireAdmin(req, res);
+    const admin = await requireStaffPermission(req, res, "social");
     if (!admin) return;
     const payload = await readJson(req);
     const meetingDate = normalizeSocialMeetingDate(payload);
@@ -2138,7 +2353,7 @@ async function handleApi(req, res, url) {
 
   const socialMeetingMatch = pathname.match(/^\/api\/admin\/social\/meetings\/(\d+)$/);
   if (method === "PATCH" && socialMeetingMatch) {
-    const admin = await requireAdmin(req, res);
+    const admin = await requireStaffPermission(req, res, "social");
     if (!admin) return;
     const meetingId = parseId(socialMeetingMatch[1]);
     const payload = await readJson(req);
@@ -2176,7 +2391,7 @@ async function handleApi(req, res, url) {
 
   const socialAssignmentCreateMatch = pathname.match(/^\/api\/admin\/social\/meetings\/(\d+)\/assignments$/);
   if (method === "POST" && socialAssignmentCreateMatch) {
-    const admin = await requireAdmin(req, res);
+    const admin = await requireStaffPermission(req, res, "social");
     if (!admin) return;
     const meetingId = parseId(socialAssignmentCreateMatch[1]);
     const payload = await readJson(req);
@@ -2230,7 +2445,7 @@ async function handleApi(req, res, url) {
 
   const socialAssignmentMatch = pathname.match(/^\/api\/admin\/social\/assignments\/(\d+)$/);
   if (method === "PATCH" && socialAssignmentMatch) {
-    const admin = await requireAdmin(req, res);
+    const admin = await requireStaffPermission(req, res, "social");
     if (!admin) return;
     const assignmentId = parseId(socialAssignmentMatch[1]);
     const payload = await readJson(req);
@@ -2439,7 +2654,7 @@ async function handleApi(req, res, url) {
 
   const socialPublishMatch = pathname.match(/^\/api\/admin\/social\/meetings\/(\d+)\/publish$/);
   if (method === "POST" && socialPublishMatch) {
-    const admin = await requireAdmin(req, res);
+    const admin = await requireStaffPermission(req, res, "social");
     if (!admin) return;
     const meetingId = parseId(socialPublishMatch[1]);
     const meetingResult = await query("SELECT * FROM social_meetings WHERE id = $1", [meetingId]);
@@ -2509,7 +2724,7 @@ async function handleApi(req, res, url) {
   }
 
   if (method === "POST" && pathname === "/api/admin/social/resources") {
-    const admin = await requireAdmin(req, res);
+    const admin = await requireStaffPermission(req, res, "social");
     if (!admin) return;
     const payload = await readJson(req);
     requireFields(payload, ["name"]);
@@ -2538,7 +2753,7 @@ async function handleApi(req, res, url) {
 
   const socialResourceMatch = pathname.match(/^\/api\/admin\/social\/resources\/(\d+)$/);
   if (method === "PATCH" && socialResourceMatch) {
-    const admin = await requireAdmin(req, res);
+    const admin = await requireStaffPermission(req, res, "social");
     if (!admin) return;
     const resourceId = parseId(socialResourceMatch[1]);
     const payload = await readJson(req);
@@ -2579,7 +2794,7 @@ async function handleApi(req, res, url) {
 
   const socialResourceStockMatch = pathname.match(/^\/api\/admin\/social\/resources\/(\d+)\/stock$/);
   if (method === "POST" && socialResourceStockMatch) {
-    const admin = await requireAdmin(req, res);
+    const admin = await requireStaffPermission(req, res, "social");
     if (!admin) return;
     const resourceId = parseId(socialResourceStockMatch[1]);
     const payload = await readJson(req);
@@ -2623,7 +2838,7 @@ async function handleApi(req, res, url) {
 
   const socialResourceDestroyedMatch = pathname.match(/^\/api\/admin\/social\/resources\/(\d+)\/destroyed$/);
   if (method === "POST" && socialResourceDestroyedMatch) {
-    const admin = await requireAdmin(req, res);
+    const admin = await requireStaffPermission(req, res, "social");
     if (!admin) return;
     const resourceId = parseId(socialResourceDestroyedMatch[1]);
     const payload = await readJson(req);
@@ -2746,7 +2961,7 @@ async function handleApi(req, res, url) {
 
   const socialResourceRequestStatusMatch = pathname.match(/^\/api\/admin\/social\/resource-requests\/(\d+)\/status$/);
   if (method === "PATCH" && socialResourceRequestStatusMatch) {
-    const admin = await requireAdmin(req, res);
+    const admin = await requireStaffPermission(req, res, "social");
     if (!admin) return;
     const requestId = parseId(socialResourceRequestStatusMatch[1]);
     const payload = await readJson(req);
@@ -2827,7 +3042,7 @@ async function handleApi(req, res, url) {
 
   const socialFundRequestStatusMatch = pathname.match(/^\/api\/admin\/social\/fund-requests\/(\d+)\/status$/);
   if (method === "PATCH" && socialFundRequestStatusMatch) {
-    const admin = await requireAdmin(req, res);
+    const admin = await requireStaffPermission(req, res, "social");
     if (!admin) return;
     const requestId = parseId(socialFundRequestStatusMatch[1]);
     const payload = await readJson(req);
@@ -2913,7 +3128,7 @@ async function handleApi(req, res, url) {
 
   const adminQuestionAction = pathname.match(/^\/api\/admin\/questions\/(\d+)\/(publish|close)$/);
   if (method === "POST" && adminQuestionAction) {
-    const admin = await requireAdmin(req, res);
+    const admin = await requireStaffPermission(req, res, "questions");
     if (!admin) return;
     const questionId = parseId(adminQuestionAction[1]);
     const action = adminQuestionAction[2];
@@ -2940,7 +3155,7 @@ async function handleApi(req, res, url) {
 
   const adminQuestionArticleMatch = pathname.match(/^\/api\/admin\/questions\/(\d+)\/publish-article$/);
   if (method === "POST" && adminQuestionArticleMatch) {
-    const admin = await requireAdmin(req, res);
+    const admin = await requireStaffPermission(req, res, "questions");
     if (!admin) return;
     const questionId = parseId(adminQuestionArticleMatch[1]);
 
@@ -2991,11 +3206,11 @@ async function handleApi(req, res, url) {
   if (method === "GET" && pathname === "/api/ballots") {
     const user = await requireActiveUser(req, res);
     if (!user) return;
-    return sendJson(res, 200, { ballots: await listBallots(user, { includeDrafts: user.role === "admin" }) });
+    return sendJson(res, 200, { ballots: await listBallots(user, { includeDrafts: hasStaffPermission(user, "votes") }) });
   }
 
   if (method === "POST" && pathname === "/api/admin/ballots") {
-    const admin = await requireAdmin(req, res);
+    const admin = await requireStaffPermission(req, res, "votes");
     if (!admin) return;
     const payload = await readJson(req);
     requireFields(payload, ["title", "ballotType"]);
@@ -3064,7 +3279,7 @@ async function handleApi(req, res, url) {
 
   const ballotStatusMatch = pathname.match(/^\/api\/admin\/ballots\/(\d+)\/(open|close)$/);
   if (method === "POST" && ballotStatusMatch) {
-    const admin = await requireAdmin(req, res);
+    const admin = await requireStaffPermission(req, res, "votes");
     if (!admin) return;
     const ballotId = parseId(ballotStatusMatch[1]);
     const status = ballotStatusMatch[2] === "open" ? "open" : "closed";
@@ -3292,7 +3507,7 @@ async function handleApi(req, res, url) {
     const firstName = String(payload.firstName || "").trim();
     const lastName = String(payload.lastName || "").trim();
     const fullName = buildFullName(firstName, lastName);
-    const role = payload.role === "admin" ? "admin" : "member";
+    const role = normalizeUserRole(payload.role);
     const allowedStatuses = ["pending_approval", "pending_policy", "pending_fee", "active", "inactive", "suspended", "rejected"];
     const membershipStatus = allowedStatuses.includes(payload.membershipStatus) ? payload.membershipStatus : "active";
 
@@ -3344,7 +3559,7 @@ async function handleApi(req, res, url) {
 
   const paymentStatusMatch = pathname.match(/^\/api\/admin\/payments\/(\d+)\/status$/);
   if (method === "PATCH" && paymentStatusMatch) {
-    const admin = await requireAdmin(req, res);
+    const admin = await requireStaffPermission(req, res, "payments");
     if (!admin) return;
     const paymentId = parseId(paymentStatusMatch[1]);
     const payload = await readJson(req);
@@ -3413,7 +3628,7 @@ async function handleApi(req, res, url) {
 
   const paymentPublishMatch = pathname.match(/^\/api\/admin\/payments\/(\d+)\/publish$/);
   if (method === "POST" && paymentPublishMatch) {
-    const admin = await requireAdmin(req, res);
+    const admin = await requireStaffPermission(req, res, "payments");
     if (!admin) return;
     const paymentId = parseId(paymentPublishMatch[1]);
     const { rows } = await query(
@@ -3443,7 +3658,7 @@ async function handleApi(req, res, url) {
   }
 
   if (method === "POST" && pathname === "/api/admin/expenditures") {
-    const admin = await requireAdmin(req, res);
+    const admin = await requireStaffPermission(req, res, "expenditures");
     if (!admin) return;
     const payload = await readJson(req);
     requireFields(payload, ["title", "amount"]);
@@ -3492,7 +3707,7 @@ async function handleApi(req, res, url) {
 
   const expenditurePublishMatch = pathname.match(/^\/api\/admin\/expenditures\/(\d+)\/publish$/);
   if (method === "POST" && expenditurePublishMatch) {
-    const admin = await requireAdmin(req, res);
+    const admin = await requireStaffPermission(req, res, "expenditures");
     if (!admin) return;
     const expenditureId = parseId(expenditurePublishMatch[1]);
     const { rows } = await query(
@@ -3521,6 +3736,287 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { expenditure: toExpenditure(rows[0]) });
   }
 
+  if (method === "POST" && pathname === "/api/admin/budgets") {
+    const admin = await requireStaffPermission(req, res, "budgets");
+    if (!admin) return;
+    const payload = await readJson(req);
+    requireFields(payload, ["departmentName", "title", "amount"]);
+    const amountCents = dollarsToCents(payload.amount);
+    const status = normalizeDepartmentBudgetStatus(payload.status);
+    const assignedTo = payload.assignedTo ? parseId(payload.assignedTo) : null;
+
+    if (assignedTo) {
+      const memberResult = await query(
+        "SELECT id FROM users WHERE id = $1 AND role = 'member' AND membership_status = 'active'",
+        [assignedTo]
+      );
+      if (memberResult.rows.length === 0) {
+        return sendError(res, 400, "Budget stewards must be active member accounts.");
+      }
+    }
+
+    const { rows } = await query(
+      `
+        INSERT INTO department_budgets (
+          department_name,
+          title,
+          amount_cents,
+          period_start,
+          period_end,
+          purpose,
+          assigned_to,
+          status,
+          created_by,
+          published_at
+        )
+        VALUES ($1, $2, $3, NULLIF($4, '')::date, NULLIF($5, '')::date, $6, $7, $8, $9, CASE WHEN $8 = 'published' THEN now() ELSE NULL END)
+        RETURNING *
+      `,
+      [
+        String(payload.departmentName).trim(),
+        String(payload.title).trim(),
+        amountCents,
+        String(payload.periodStart || "").trim(),
+        String(payload.periodEnd || "").trim(),
+        String(payload.purpose || "").trim(),
+        assignedTo,
+        status,
+        admin.id
+      ]
+    );
+
+    if (status === "published") {
+      await notifyActiveMembers(
+        "budget",
+        "Department budget published",
+        `${rows[0].department_name} was assigned a $${centsToDollarAmount(rows[0].amount_cents)} budget for ${rows[0].title}.`,
+        "/financials"
+      );
+    }
+
+    if (assignedTo) {
+      await createNotification(
+        assignedTo,
+        "budget",
+        "Department budget assigned",
+        `You were assigned as steward for the ${rows[0].department_name} budget: ${rows[0].title}.`,
+        "/financials"
+      );
+    }
+
+    return sendJson(res, 201, { budget: toDepartmentBudget(rows[0]) });
+  }
+
+  const departmentBudgetMatch = pathname.match(/^\/api\/admin\/budgets\/(\d+)$/);
+  if (method === "PATCH" && departmentBudgetMatch) {
+    const admin = await requireStaffPermission(req, res, "budgets");
+    if (!admin) return;
+    const budgetId = parseId(departmentBudgetMatch[1]);
+    const payload = await readJson(req);
+    requireFields(payload, ["departmentName", "title", "amount"]);
+    const amountCents = dollarsToCents(payload.amount);
+    const status = normalizeDepartmentBudgetStatus(payload.status);
+    const assignedTo = payload.assignedTo ? parseId(payload.assignedTo) : null;
+
+    if (assignedTo) {
+      const memberResult = await query(
+        "SELECT id FROM users WHERE id = $1 AND role = 'member' AND membership_status = 'active'",
+        [assignedTo]
+      );
+      if (memberResult.rows.length === 0) {
+        return sendError(res, 400, "Budget stewards must be active member accounts.");
+      }
+    }
+
+    const { rows } = await query(
+      `
+        UPDATE department_budgets
+        SET department_name = $2,
+            title = $3,
+            amount_cents = $4,
+            period_start = NULLIF($5, '')::date,
+            period_end = NULLIF($6, '')::date,
+            purpose = $7,
+            assigned_to = $8,
+            status = $9,
+            published_at = CASE WHEN $9 = 'published' THEN COALESCE(published_at, now()) ELSE published_at END,
+            updated_at = now()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [
+        budgetId,
+        String(payload.departmentName).trim(),
+        String(payload.title).trim(),
+        amountCents,
+        String(payload.periodStart || "").trim(),
+        String(payload.periodEnd || "").trim(),
+        String(payload.purpose || "").trim(),
+        assignedTo,
+        status
+      ]
+    );
+
+    if (rows.length === 0) {
+      return sendError(res, 404, "Department budget not found.");
+    }
+
+    if (status === "published") {
+      await notifyActiveMembers(
+        "budget",
+        "Department budget updated",
+        `${rows[0].department_name} has a $${centsToDollarAmount(rows[0].amount_cents)} published budget for ${rows[0].title}.`,
+        "/financials"
+      );
+    }
+
+    return sendJson(res, 200, { budget: toDepartmentBudget(rows[0]) });
+  }
+
+  const adminBudgetExpenseMatch = pathname.match(/^\/api\/admin\/budgets\/(\d+)\/expenses$/);
+  if (method === "POST" && adminBudgetExpenseMatch) {
+    const admin = await requireStaffPermission(req, res, "budgets");
+    if (!admin) return;
+    const budgetId = parseId(adminBudgetExpenseMatch[1]);
+    const payload = await readJson(req);
+    requireFields(payload, ["title", "amount"]);
+    const amountCents = dollarsToCents(payload.amount);
+    const status = normalizeDepartmentBudgetExpenseStatus(payload.status);
+
+    const budgetResult = await query("SELECT * FROM department_budgets WHERE id = $1", [budgetId]);
+    const budget = budgetResult.rows[0];
+    if (!budget) {
+      return sendError(res, 404, "Department budget not found.");
+    }
+
+    const { rows } = await query(
+      `
+        INSERT INTO department_budget_expenses (
+          budget_id,
+          title,
+          vendor,
+          amount_cents,
+          expense_date,
+          note,
+          status,
+          created_by,
+          published_at
+        )
+        VALUES ($1, $2, $3, $4, COALESCE(NULLIF($5, '')::date, CURRENT_DATE), $6, $7, $8, CASE WHEN $7 = 'published' THEN now() ELSE NULL END)
+        RETURNING *
+      `,
+      [
+        budgetId,
+        String(payload.title).trim(),
+        String(payload.vendor || "").trim(),
+        amountCents,
+        String(payload.expenseDate || "").trim(),
+        String(payload.note || "").trim(),
+        status,
+        admin.id
+      ]
+    );
+
+    if (status === "published") {
+      await notifyActiveMembers(
+        "budget",
+        "Budget expense published",
+        `${budget.department_name} published a $${centsToDollarAmount(rows[0].amount_cents)} budget expense for ${rows[0].title}.`,
+        "/financials"
+      );
+    }
+
+    return sendJson(res, 201, { expense: toDepartmentBudgetExpense(rows[0]) });
+  }
+
+  const memberBudgetExpenseMatch = pathname.match(/^\/api\/budgets\/(\d+)\/expenses$/);
+  if (method === "POST" && memberBudgetExpenseMatch) {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    if (user.role !== "member") {
+      return sendError(res, 403, "Only assigned department members can submit budget expenses.");
+    }
+    const budgetId = parseId(memberBudgetExpenseMatch[1]);
+    const payload = await readJson(req);
+    requireFields(payload, ["title", "amount"]);
+    const amountCents = dollarsToCents(payload.amount);
+
+    const budgetResult = await query(
+      "SELECT * FROM department_budgets WHERE id = $1 AND assigned_to = $2 AND status = 'published'",
+      [budgetId, user.id]
+    );
+    const budget = budgetResult.rows[0];
+    if (!budget) {
+      return sendError(res, 403, "You can only submit expenses for a published budget assigned to you.");
+    }
+
+    const { rows } = await query(
+      `
+        INSERT INTO department_budget_expenses (
+          budget_id,
+          title,
+          vendor,
+          amount_cents,
+          expense_date,
+          note,
+          status,
+          created_by
+        )
+        VALUES ($1, $2, $3, $4, COALESCE(NULLIF($5, '')::date, CURRENT_DATE), $6, 'draft', $7)
+        RETURNING *
+      `,
+      [
+        budgetId,
+        String(payload.title).trim(),
+        String(payload.vendor || "").trim(),
+        amountCents,
+        String(payload.expenseDate || "").trim(),
+        String(payload.note || "").trim(),
+        user.id
+      ]
+    );
+
+    await notifyAdmins(
+      "budget_expense",
+      "Budget expense submitted",
+      `${user.fullName} submitted a $${centsToDollarAmount(amountCents)} expense for the ${budget.department_name} budget.`,
+      "/admin"
+    );
+
+    return sendJson(res, 201, { expense: toDepartmentBudgetExpense(rows[0]) });
+  }
+
+  const budgetExpensePublishMatch = pathname.match(/^\/api\/admin\/budget-expenses\/(\d+)\/publish$/);
+  if (method === "POST" && budgetExpensePublishMatch) {
+    const admin = await requireStaffPermission(req, res, "budgets");
+    if (!admin) return;
+    const expenseId = parseId(budgetExpensePublishMatch[1]);
+    const { rows } = await query(
+      `
+        UPDATE department_budget_expenses
+        SET status = 'published',
+            published_at = COALESCE(published_at, now()),
+            updated_at = now()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [expenseId]
+    );
+
+    if (rows.length === 0) {
+      return sendError(res, 404, "Budget expense not found.");
+    }
+
+    await notifyActiveMembers(
+      "budget",
+      "Budget expense published",
+      `${rows[0].title} was published as a $${centsToDollarAmount(rows[0].amount_cents)} department budget expense.`,
+      "/financials"
+    );
+
+    return sendJson(res, 200, { expense: toDepartmentBudgetExpense(rows[0]) });
+  }
+
   const notificationMatch = pathname.match(/^\/api\/notifications\/(\d+)\/read$/);
   if (method === "POST" && notificationMatch) {
     const user = await requireUser(req, res);
@@ -3533,7 +4029,7 @@ async function handleApi(req, res, url) {
   }
 
   if (method === "POST" && pathname === "/api/admin/notifications/clear-old") {
-    const admin = await requireAdmin(req, res);
+    const admin = await requireStaffPermission(req, res, "notifications:clear");
     if (!admin) return;
     const payload = await readJson(req);
     const days = Number(payload.days || 30);
@@ -3555,13 +4051,13 @@ async function handleApi(req, res, url) {
   }
 
   if (method === "GET" && pathname === "/api/admin/payment-details") {
-    const admin = await requireAdmin(req, res);
+    const admin = await requireStaffPermission(req, res, "payment-details");
     if (!admin) return;
     return sendJson(res, 200, { paymentDetails: await listOrganizationPaymentDetails({ includeDisabled: true }) });
   }
 
   if (method === "PATCH" && pathname === "/api/admin/about") {
-    const admin = await requireAdmin(req, res);
+    const admin = await requireStaffPermission(req, res, "about");
     if (!admin) return;
     const payload = await readJson(req);
     requireFields(payload, ["summary", "purpose"]);
@@ -3594,7 +4090,7 @@ async function handleApi(req, res, url) {
   }
 
   if (method === "POST" && pathname === "/api/admin/about/positions") {
-    const admin = await requireAdmin(req, res);
+    const admin = await requireStaffPermission(req, res, "about");
     if (!admin) return;
     const payload = await readJson(req);
     requireFields(payload, ["title"]);
@@ -3637,11 +4133,14 @@ async function handleApi(req, res, url) {
 
   const aboutPositionStatusMatch = pathname.match(/^\/api\/admin\/about\/positions\/(\d+)\/status$/);
   if (method === "PATCH" && aboutPositionStatusMatch) {
-    const admin = await requireAdmin(req, res);
+    const admin = await requireStaffPermission(req, res, "about");
     if (!admin) return;
     const positionId = parseId(aboutPositionStatusMatch[1]);
     const payload = await readJson(req);
     const status = normalizeLeadershipStatus(payload.status);
+    if (status === "archived" && admin.role !== "admin") {
+      return sendError(res, 403, "Only full admins can archive leadership positions.");
+    }
 
     const { rows } = await query(
       `
@@ -3668,7 +4167,7 @@ async function handleApi(req, res, url) {
 
   const aboutPositionMatch = pathname.match(/^\/api\/admin\/about\/positions\/(\d+)$/);
   if (method === "PATCH" && aboutPositionMatch) {
-    const admin = await requireAdmin(req, res);
+    const admin = await requireStaffPermission(req, res, "about");
     if (!admin) return;
     const positionId = parseId(aboutPositionMatch[1]);
     const payload = await readJson(req);
@@ -3676,6 +4175,9 @@ async function handleApi(req, res, url) {
     const image = validateImageUpload(payload.image);
     const displayOrder = Number(payload.displayOrder || 0);
     const status = normalizeLeadershipStatus(payload.status);
+    if (status === "archived" && admin.role !== "admin") {
+      return sendError(res, 403, "Only full admins can archive leadership positions.");
+    }
 
     const { rows } = await query(
       `
@@ -3720,7 +4222,7 @@ async function handleApi(req, res, url) {
   }
 
   if (method === "POST" && pathname === "/api/admin/about/articles") {
-    const admin = await requireAdmin(req, res);
+    const admin = await requireStaffPermission(req, res, "about");
     if (!admin) return;
     const payload = await readJson(req);
     requireFields(payload, ["title", "body"]);
@@ -3768,7 +4270,7 @@ async function handleApi(req, res, url) {
 
   const aboutArticleStatusMatch = pathname.match(/^\/api\/admin\/about\/articles\/(\d+)\/status$/);
   if (method === "PATCH" && aboutArticleStatusMatch) {
-    const admin = await requireAdmin(req, res);
+    const admin = await requireStaffPermission(req, res, "about");
     if (!admin) return;
     const articleId = parseId(aboutArticleStatusMatch[1]);
     const payload = await readJson(req);
@@ -3799,7 +4301,7 @@ async function handleApi(req, res, url) {
 
   const aboutArticleMatch = pathname.match(/^\/api\/admin\/about\/articles\/(\d+)$/);
   if (method === "PATCH" && aboutArticleMatch) {
-    const admin = await requireAdmin(req, res);
+    const admin = await requireStaffPermission(req, res, "about");
     if (!admin) return;
     const articleId = parseId(aboutArticleMatch[1]);
     const payload = await readJson(req);
@@ -3863,7 +4365,7 @@ async function handleApi(req, res, url) {
 
   const paymentDetailMatch = pathname.match(/^\/api\/admin\/payment-details\/([a-z_]+)$/);
   if ((method === "PATCH" || method === "PUT") && paymentDetailMatch) {
-    const admin = await requireAdmin(req, res);
+    const admin = await requireStaffPermission(req, res, "payment-details");
     if (!admin) return;
     const paymentMethod = normalizePaymentMethod(paymentDetailMatch[1]);
     const payload = await readJson(req);
@@ -3909,7 +4411,7 @@ async function handleApi(req, res, url) {
   }
 
   if (method === "GET" && pathname === "/api/admin/notifications") {
-    const admin = await requireAdmin(req, res);
+    const admin = await requireStaffPermission(req, res, "notifications:view");
     if (!admin) return;
 
     const notifications = await listAdminNotifications({
@@ -3922,9 +4424,9 @@ async function handleApi(req, res, url) {
   }
 
   if (method === "GET" && pathname === "/api/admin/summary") {
-    const admin = await requireAdmin(req, res);
+    const admin = await requireStaffPermission(req, res, "overview");
     if (!admin) return;
-    const [members, questions, payments, ballots, announcements, events, expenditures, financialSummary, paymentDetails, about, social] = await Promise.all([
+    const [members, questions, payments, ballots, announcements, events, expenditures, budgets, financialSummary, paymentDetails, about, social] = await Promise.all([
       listMembers(),
       listQuestions({ includePending: true }),
       listPayments(admin, { includeAll: true }),
@@ -3932,12 +4434,47 @@ async function handleApi(req, res, url) {
       listAdminAnnouncements(),
       listAdminEvents(),
       listExpenditures(),
+      listDepartmentBudgets({ includeAll: true }),
       getFinancialSummary(),
       listOrganizationPaymentDetails({ includeDisabled: true }),
       getAboutContent({ includeHidden: true }),
       listSocialCoordinator(admin, { includeAll: true })
     ]);
-    return sendJson(res, 200, { members, questions, payments, ballots, announcements, events, expenditures, financialSummary, paymentDetails, about, social });
+
+    const canUseMembers =
+      hasStaffPermission(admin, "profile:view") ||
+      hasStaffPermission(admin, "payments") ||
+      hasStaffPermission(admin, "budgets") ||
+      hasStaffPermission(admin, "social") ||
+      hasStaffPermission(admin, "notifications:view");
+    const canUseFinancials =
+      hasStaffPermission(admin, "payments") ||
+      hasStaffPermission(admin, "expenditures") ||
+      hasStaffPermission(admin, "budgets");
+    const shouldUseFullMemberList =
+      hasStaffPermission(admin, "profile:view") ||
+      hasStaffPermission(admin, "payments") ||
+      hasStaffPermission(admin, "notifications:view");
+    const memberSummarySource = shouldUseFullMemberList
+      ? members
+      : members.filter((member) => member.role === "member" && member.membershipStatus === "active");
+
+    return sendJson(res, 200, {
+      members: canUseMembers ? membersForStaffSummary(memberSummarySource, admin) : [],
+      questions: hasStaffPermission(admin, "questions") ? questions : [],
+      payments: hasStaffPermission(admin, "payments") ? payments : [],
+      ballots: hasStaffPermission(admin, "votes") ? ballots : [],
+      announcements: hasStaffPermission(admin, "announcements") ? announcements : [],
+      events: hasStaffPermission(admin, "events") ? events : [],
+      expenditures: hasStaffPermission(admin, "expenditures") ? expenditures : [],
+      budgets: hasStaffPermission(admin, "budgets") ? budgets : [],
+      financialSummary: canUseFinancials ? financialSummary : null,
+      paymentDetails: hasStaffPermission(admin, "payment-details") ? paymentDetails : [],
+      about: hasStaffPermission(admin, "about") ? about : null,
+      social: hasStaffPermission(admin, "social")
+        ? social
+        : { meetings: [], resources: [], resourceAdjustments: [], resourceRequests: [], fundRequests: [] }
+    });
   }
 
   return sendError(res, 404, "API route not found.");
@@ -3995,4 +4532,5 @@ console.log(`Default admin checked: ${defaultAdmin.email}`);
 
 server.listen(config.port, () => {
   console.log(`237 Ville is running at http://localhost:${config.port}`);
+  console.log(`237 Ville public app URL: ${config.appUrl}`);
 });

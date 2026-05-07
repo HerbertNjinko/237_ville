@@ -7,10 +7,7 @@
 - Member registration and email-based login.
 - Automatic default admin bootstrap from `.env` on migration/server start.
 - Forced password update for the default admin and approved members with temporary passwords.
-- Admin validation workflow for new registrations, including application statements and uploaded ID cards.
-- Admin rejection workflow for registrations that do not pass validation.
-- Temporary password generation in the admin approval screen.
-- Admin cleanup for old notifications.
+- Admin approval workflow for new registrations.
 - Member onboarding with policy acknowledgement and registration fee review.
 - Member profiles with contact details and notification preferences.
 - Announcements and articles published by admins.
@@ -77,10 +74,9 @@ The app currently records dues, donations, and registration fee payment records 
 
 ## Member onboarding flow
 
-1. A visitor registers with first name, last name, email, an application statement, and an ID card upload.
-2. Admins receive an in-app notification and validate the application and ID card.
-3. Admins approve the account with a temporary password or reject the registration with a reason.
-4. The member logs in with the temporary password and must set a private password.
-5. The member signs the organization policy.
-6. The member submits a registration fee record.
-7. An admin marks the registration fee received, which activates the member portal account.
+1. A visitor registers with first name, last name, and email only.
+2. Admins receive an in-app notification and approve the account with a temporary password.
+3. The member logs in with the temporary password and must set a private password.
+4. The member signs the organization policy.
+5. The member submits a registration fee record.
+6. An admin marks the registration fee received, which activates the member portal account.

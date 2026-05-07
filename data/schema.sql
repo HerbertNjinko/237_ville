@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS users (
   identity_document_type TEXT DEFAULT '',
   identity_document_size INTEGER DEFAULT 0,
   identity_document_data_url TEXT DEFAULT '',
-  role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('member', 'admin')),
+  role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('member', 'admin', 'secretary', 'treasurer', 'social')),
   membership_status TEXT NOT NULL DEFAULT 'pending_approval' CHECK (membership_status IN ('pending_approval', 'pending_policy', 'pending_fee', 'active', 'inactive', 'suspended', 'rejected')),
   notification_opt_in BOOLEAN NOT NULL DEFAULT TRUE,
   password_must_change BOOLEAN NOT NULL DEFAULT FALSE,
@@ -47,6 +47,8 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS approved_by BIGINT REFERENCES users(i
 ALTER TABLE users ADD COLUMN IF NOT EXISTS rejected_at TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS rejected_by BIGINT REFERENCES users(id) ON DELETE SET NULL;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS rejection_reason TEXT DEFAULT '';
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
+ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('member', 'admin', 'secretary', 'treasurer', 'social'));
 ALTER TABLE users ALTER COLUMN membership_status SET DEFAULT 'pending_approval';
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_membership_status_check;
 ALTER TABLE users ADD CONSTRAINT users_membership_status_check CHECK (membership_status IN ('pending_approval', 'pending_policy', 'pending_fee', 'active', 'inactive', 'suspended', 'rejected'));
@@ -338,6 +340,61 @@ ALTER TABLE expenditures ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;
 ALTER TABLE expenditures DROP CONSTRAINT IF EXISTS expenditures_status_check;
 ALTER TABLE expenditures ADD CONSTRAINT expenditures_status_check CHECK (status IN ('draft', 'published'));
 
+CREATE TABLE IF NOT EXISTS department_budgets (
+  id BIGSERIAL PRIMARY KEY,
+  department_name TEXT NOT NULL,
+  title TEXT NOT NULL,
+  amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+  period_start DATE,
+  period_end DATE,
+  purpose TEXT DEFAULT '',
+  assigned_to BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published', 'closed')),
+  created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  published_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE department_budgets ADD COLUMN IF NOT EXISTS department_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE department_budgets ADD COLUMN IF NOT EXISTS title TEXT NOT NULL DEFAULT '';
+ALTER TABLE department_budgets ADD COLUMN IF NOT EXISTS amount_cents INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE department_budgets ADD COLUMN IF NOT EXISTS period_start DATE;
+ALTER TABLE department_budgets ADD COLUMN IF NOT EXISTS period_end DATE;
+ALTER TABLE department_budgets ADD COLUMN IF NOT EXISTS purpose TEXT DEFAULT '';
+ALTER TABLE department_budgets ADD COLUMN IF NOT EXISTS assigned_to BIGINT REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE department_budgets ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'draft';
+ALTER TABLE department_budgets ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;
+ALTER TABLE department_budgets DROP CONSTRAINT IF EXISTS department_budgets_amount_cents_check;
+ALTER TABLE department_budgets ADD CONSTRAINT department_budgets_amount_cents_check CHECK (amount_cents > 0);
+ALTER TABLE department_budgets DROP CONSTRAINT IF EXISTS department_budgets_status_check;
+ALTER TABLE department_budgets ADD CONSTRAINT department_budgets_status_check CHECK (status IN ('draft', 'published', 'closed'));
+
+CREATE TABLE IF NOT EXISTS department_budget_expenses (
+  id BIGSERIAL PRIMARY KEY,
+  budget_id BIGINT NOT NULL REFERENCES department_budgets(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  vendor TEXT DEFAULT '',
+  amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+  expense_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  note TEXT DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published')),
+  created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  published_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE department_budget_expenses ADD COLUMN IF NOT EXISTS vendor TEXT DEFAULT '';
+ALTER TABLE department_budget_expenses ADD COLUMN IF NOT EXISTS expense_date DATE NOT NULL DEFAULT CURRENT_DATE;
+ALTER TABLE department_budget_expenses ADD COLUMN IF NOT EXISTS note TEXT DEFAULT '';
+ALTER TABLE department_budget_expenses ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'draft';
+ALTER TABLE department_budget_expenses ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;
+ALTER TABLE department_budget_expenses DROP CONSTRAINT IF EXISTS department_budget_expenses_amount_cents_check;
+ALTER TABLE department_budget_expenses ADD CONSTRAINT department_budget_expenses_amount_cents_check CHECK (amount_cents > 0);
+ALTER TABLE department_budget_expenses DROP CONSTRAINT IF EXISTS department_budget_expenses_status_check;
+ALTER TABLE department_budget_expenses ADD CONSTRAINT department_budget_expenses_status_check CHECK (status IN ('draft', 'published'));
+
 CREATE TABLE IF NOT EXISTS social_meetings (
   id BIGSERIAL PRIMARY KEY,
   title TEXT NOT NULL,
@@ -526,6 +583,9 @@ CREATE INDEX IF NOT EXISTS idx_votes_ballot_option ON votes(ballot_id, option_id
 CREATE INDEX IF NOT EXISTS idx_payments_user_created ON payments(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_payments_published ON payments(purpose, status, published_at DESC);
 CREATE INDEX IF NOT EXISTS idx_expenditures_status_date ON expenditures(status, expense_date DESC);
+CREATE INDEX IF NOT EXISTS idx_department_budgets_status ON department_budgets(status, department_name);
+CREATE INDEX IF NOT EXISTS idx_department_budgets_assigned ON department_budgets(assigned_to, status);
+CREATE INDEX IF NOT EXISTS idx_department_budget_expenses_budget ON department_budget_expenses(budget_id, status, expense_date DESC);
 CREATE INDEX IF NOT EXISTS idx_social_meetings_date ON social_meetings(meeting_date DESC);
 CREATE INDEX IF NOT EXISTS idx_social_assignments_meeting ON social_assignments(meeting_id);
 CREATE INDEX IF NOT EXISTS idx_social_assignments_user ON social_assignments(user_id, status);
