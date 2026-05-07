@@ -449,6 +449,22 @@ a {
   gap: 6px;
 }
 
+.portal-switcher {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.portal-switcher .tab-button {
+  color: #dce4ee;
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+.portal-switcher .tab-button.active {
+  background: #ffffff;
+  color: var(--ink);
+}
+
 .side-nav .nav-button {
   width: 100%;
   text-align: left;

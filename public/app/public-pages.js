@@ -126,7 +126,7 @@ function renderAuth() {
   app.innerHTML = `
     <main class="public-layout">
       ${renderPublicMenu()}
-      ${state.authMode === "about" ? renderPublicAboutPage(about) : state.authMode === "login" || state.authMode === "register" || state.authMode === "donate" ? renderPublicFormPage(about) : renderPublicHome(about)}
+      ${state.authMode === "about" ? renderPublicAboutPage(about) : ["login", "register", "donate", "reset"].includes(state.authMode) ? renderPublicFormPage(about) : renderPublicHome(about)}
     </main>
   `;
 }
@@ -164,8 +164,9 @@ function renderPublicAboutPage(about) {
 function renderPublicFormPage(about) {
   const isRegister = state.authMode === "register";
   const isDonate = state.authMode === "donate";
-  const formAction = isDonate ? "anonymous-donation" : isRegister ? "register" : "login";
-  const heading = isDonate ? "Make a donation" : isRegister ? "Create member account" : "Member sign in";
+  const isReset = state.authMode === "reset";
+  const formAction = isDonate ? "anonymous-donation" : isRegister ? "register" : isReset ? "forgot-password" : "login";
+  const heading = isDonate ? "Make a donation" : isRegister ? "Create member account" : isReset ? "Reset password" : "Member sign in";
   const introImageSrc = isDonate ? donateImageSrc : companyLogoSrc;
   const introImageAlt = isDonate ? "Donate to 237 Ville" : "237 Ville logo";
 
@@ -237,14 +238,19 @@ function renderPublicFormPage(about) {
               : ""
           }
           ${
-            isRegister || isDonate
+            isRegister || isDonate || isReset
               ? ""
               : `<label class="field">
                   <span>Password</span>
                   <input name="password" type="password" autocomplete="current-password" minlength="8" required>
                 </label>`
           }
-          <button class="primary-button" type="submit">${isDonate ? "Donate" : isRegister ? "Create account" : "Sign in"}</button>
+          <button class="primary-button" type="submit">${isDonate ? "Donate" : isRegister ? "Create account" : isReset ? "Request reset" : "Sign in"}</button>
+          ${
+            !isRegister && !isDonate && !isReset
+              ? `<button class="ghost-button" data-auth-mode="reset" type="button">Forgot password?</button>`
+              : ""
+          }
           <p class="message ${state.messageType === "ok" ? "ok" : ""}">${escapeHtml(state.message)}</p>
         </form>
       </div>

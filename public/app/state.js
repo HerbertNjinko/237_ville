@@ -31,6 +31,7 @@ const state = {
     dateFrom: "",
     dateTo: ""
   },
+  portalMode: "member",
   view: "overview",
   authMode: "home",
   message: "",
@@ -73,22 +74,39 @@ const adminRolePermissions = {
 };
 
 function isFullAdmin(user = state.user) {
-  return user?.role === "admin";
+  return effectiveAdminRole(user) === "admin";
+}
+
+function effectiveAdminRole(user = state.user) {
+  return user?.staffRole || (adminRolePermissions[user?.role] ? user.role : "");
 }
 
 function isAdminPortalUser(user = state.user) {
-  return Boolean(user && adminRolePermissions[user.role]);
+  return Boolean(user && adminRolePermissions[effectiveAdminRole(user)]);
+}
+
+function hasMemberPortal(user = state.user) {
+  return user?.hasMemberPortal !== false && user?.role === "member";
+}
+
+function hasBothPortals(user = state.user) {
+  return hasMemberPortal(user) && isAdminPortalUser(user);
+}
+
+function isAdminPortalMode(user = state.user) {
+  return isAdminPortalUser(user) && (!hasMemberPortal(user) || state.portalMode === "admin");
 }
 
 function canAccessAdminView(view, user = state.user) {
-  return adminRolePermissions[user?.role]?.has(view) || false;
+  return adminRolePermissions[effectiveAdminRole(user)]?.has(view) || false;
 }
 
 function canEditAdminView(view, user = state.user) {
   if (isFullAdmin(user)) return true;
-  if (user?.role === "secretary") return ["about", "announcements", "questions", "votes"].includes(view);
-  if (user?.role === "treasurer") return ["announcements", "questions", "events", "votes", "payments", "payment-details", "expenditures", "budgets", "notifications"].includes(view);
-  if (user?.role === "social") return ["announcements", "questions", "events", "social"].includes(view);
+  const role = effectiveAdminRole(user);
+  if (role === "secretary") return ["about", "announcements", "questions", "votes"].includes(view);
+  if (role === "treasurer") return ["announcements", "questions", "events", "votes", "payments", "payment-details", "expenditures", "budgets", "notifications"].includes(view);
+  if (role === "social") return ["announcements", "questions", "events", "social"].includes(view);
   return false;
 }
 

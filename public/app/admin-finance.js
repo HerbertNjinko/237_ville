@@ -904,13 +904,20 @@ function renderMembersTable() {
                           <input name="state" value="${escapeHtml(member.state)}">
                         </label>
                         <label class="field">
-                          <span>Role</span>
-                          <select name="role">
-                            <option value="member" ${member.role === "member" ? "selected" : ""}>Member</option>
-                            <option value="admin" ${member.role === "admin" ? "selected" : ""}>Admin</option>
-                            <option value="secretary" ${member.role === "secretary" ? "selected" : ""}>Secretary</option>
-                            <option value="treasurer" ${member.role === "treasurer" ? "selected" : ""}>Treasurer</option>
-                            <option value="social" ${member.role === "social" ? "selected" : ""}>Social coordinator</option>
+                          <span>Account type</span>
+                          <select name="accountRole">
+                            <option value="member" ${member.role === "member" ? "selected" : ""}>Member account</option>
+                            <option value="admin" ${member.role === "admin" ? "selected" : ""}>Independent admin account</option>
+                          </select>
+                        </label>
+                        <label class="field">
+                          <span>Elevated portal access</span>
+                          <select name="staffRole">
+                            <option value="" ${!member.staffRole ? "selected" : ""}>No staff access</option>
+                            <option value="admin" ${member.staffRole === "admin" ? "selected" : ""}>Admin</option>
+                            <option value="secretary" ${member.staffRole === "secretary" ? "selected" : ""}>Secretary</option>
+                            <option value="treasurer" ${member.staffRole === "treasurer" ? "selected" : ""}>Treasurer</option>
+                            <option value="social" ${member.staffRole === "social" ? "selected" : ""}>Social coordinator</option>
                           </select>
                         </label>
                         <label class="field">
@@ -921,8 +928,15 @@ function renderMembersTable() {
                               .join("")}
                           </select>
                         </label>
+                        <label class="field">
+                          <span>Staff access note</span>
+                          <input name="staffRoleNote" value="${escapeHtml(member.staffRoleNote || "")}" placeholder="Election, handover, or replacement note">
+                        </label>
                       </div>
                       <div class="item-meta">
+                        <span>${member.staffRole ? `Staff access: ${escapeHtml(member.staffRole)}` : "No staff access"}</span>
+                        ${member.staffRoleAssignedAt ? `<span>Assigned ${formatDate(member.staffRoleAssignedAt)}</span>` : ""}
+                        ${member.staffRoleRevokedAt && !member.staffRole ? `<span>Revoked ${formatDate(member.staffRoleRevokedAt)}</span>` : ""}
                         <span>${member.passwordMustChange ? "Password reset required" : "Password set"}</span>
                         <span>${member.policyAcceptedAt ? "Policy signed" : "Policy not signed"}</span>
                       </div>
@@ -930,11 +944,26 @@ function renderMembersTable() {
                     </form>`
                   : `<div class="item-meta">
                       <span>${escapeHtml(member.role)}</span>
+                      ${member.staffRole ? `<span>Staff access: ${escapeHtml(member.staffRole)}</span>` : ""}
                       <span>${escapeHtml(member.phone || "No phone")}</span>
                       <span>${escapeHtml([member.city, member.state].filter(Boolean).join(", ") || "No location")}</span>
                       <span>${member.passwordMustChange ? "Password reset required" : "Password set"}</span>
                       <span>${member.policyAcceptedAt ? "Policy signed" : "Policy not signed"}</span>
                     </div>`
+              }
+              ${
+                canManage && Number(member.id) !== Number(state.user.id) && !["inactive", "suspended", "rejected"].includes(member.membershipStatus)
+                  ? `<form class="form-stack compact-form" data-action="admin-reset-password" data-member-id="${member.id}">
+                      <label class="field">
+                        <span>Temporary password</span>
+                        <input name="temporaryPassword" type="text" minlength="8" required>
+                      </label>
+                      <div class="actions">
+                        <button class="ghost-button" data-click="generate-temp-password" type="button">Generate password</button>
+                        <button class="secondary-button" type="submit">Reset password</button>
+                      </div>
+                    </form>`
+                  : ""
               }
             </article>
           `

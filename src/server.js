@@ -30,6 +30,7 @@ const publicDir = join(__dirname, "..", "public");
 const paymentMethods = new Set(["cash", "cash_app", "venmo", "zelle", "paypal", "cheque", "bank_account"]);
 const userRoles = new Set(["member", "admin", "secretary", "treasurer", "social"]);
 const staffRoles = new Set(["admin", "secretary", "treasurer", "social"]);
+const assignableStaffRoles = new Set(["", "admin", "secretary", "treasurer", "social"]);
 const rolePermissions = {
   admin: new Set(["overview", "about", "announcements", "questions", "events", "social", "votes", "payments", "payment-details", "expenditures", "budgets", "profile:view", "profile:manage", "notifications:view", "notifications:clear", "archive", "delete"]),
   secretary: new Set(["overview", "about", "announcements", "questions", "votes", "profile:view", "notifications:view"]),
@@ -70,6 +71,9 @@ function toUser(row) {
       dataUrl: row.identity_document_data_url || ""
     },
     role: row.role,
+    staffRole: row.staff_role || "",
+    effectiveRole: effectiveStaffRole(row) || row.role,
+    hasMemberPortal: row.role === "member",
     membershipStatus: row.membership_status,
     notificationOptIn: row.notification_opt_in,
     passwordMustChange: row.password_must_change,
@@ -139,14 +143,27 @@ function normalizeUserRole(role) {
   return userRoles.has(value) ? value : "member";
 }
 
+function normalizeStaffRole(role) {
+  const value = String(role || "").trim().toLowerCase();
+  return assignableStaffRoles.has(value) ? value : "";
+}
+
 function isStaffRole(role) {
   return staffRoles.has(role);
 }
 
+function effectiveStaffRole(user) {
+  const staffRole = String(user?.staffRole || user?.staff_role || "").trim().toLowerCase();
+  if (isStaffRole(staffRole)) return staffRole;
+  const accountRole = String(user?.role || "").trim().toLowerCase();
+  return isStaffRole(accountRole) ? accountRole : "";
+}
+
 function hasStaffPermission(user, permission) {
-  if (!user || !isStaffRole(user.role)) return false;
-  if (user.role === "admin") return true;
-  return rolePermissions[user.role]?.has(permission) || false;
+  const role = effectiveStaffRole(user);
+  if (!user || !role) return false;
+  if (role === "admin") return true;
+  return rolePermissions[role]?.has(permission) || false;
 }
 
 function parseId(value) {
@@ -326,7 +343,7 @@ async function notifyAdmins(type, title, body = "", link = "/admin") {
       INSERT INTO notifications (user_id, type, title, body, link)
       SELECT id, $1, $2, $3, $4
       FROM users
-      WHERE role = 'admin'
+      WHERE (role = 'admin' OR staff_role = 'admin')
         AND membership_status = 'active'
         AND notification_opt_in = TRUE
     `,
@@ -399,7 +416,7 @@ async function requireAdmin(req, res) {
   if (!user) {
     return null;
   }
-  if (user.role !== "admin" || !isPortalReady(user)) {
+  if (effectiveStaffRole(user) !== "admin" || !isPortalReady(user)) {
     sendError(res, 403, "Admin access is required.");
     return null;
   }
@@ -1272,6 +1289,10 @@ async function listMembers() {
         identity_document_size,
         identity_document_data_url,
         role,
+        staff_role,
+        staff_role_assigned_at,
+        staff_role_revoked_at,
+        staff_role_note,
         membership_status,
         password_must_change,
         policy_accepted_at,
@@ -1302,6 +1323,12 @@ async function listMembers() {
       dataUrl: row.identity_document_data_url || ""
     },
     role: row.role,
+    staffRole: row.staff_role || "",
+    effectiveRole: effectiveStaffRole(row) || row.role,
+    hasMemberPortal: row.role === "member",
+    staffRoleAssignedAt: row.staff_role_assigned_at,
+    staffRoleRevokedAt: row.staff_role_revoked_at,
+    staffRoleNote: row.staff_role_note || "",
     membershipStatus: row.membership_status,
     passwordMustChange: row.password_must_change,
     policyAcceptedAt: row.policy_accepted_at,
@@ -1313,7 +1340,7 @@ async function listMembers() {
 }
 
 function membersForStaffSummary(members, staffUser) {
-  if (staffUser.role === "admin") return members;
+  if (effectiveStaffRole(staffUser) === "admin") return members;
 
   const canViewProfiles = hasStaffPermission(staffUser, "profile:view");
 
@@ -1334,6 +1361,12 @@ function membersForStaffSummary(members, staffUser) {
       dataUrl: ""
     },
     role: member.role,
+    staffRole: member.staffRole || "",
+    effectiveRole: member.effectiveRole || member.role,
+    hasMemberPortal: member.hasMemberPortal,
+    staffRoleAssignedAt: member.staffRoleAssignedAt,
+    staffRoleRevokedAt: member.staffRoleRevokedAt,
+    staffRoleNote: canViewProfiles ? member.staffRoleNote : "",
     membershipStatus: member.membershipStatus,
     passwordMustChange: member.passwordMustChange,
     policyAcceptedAt: member.policyAcceptedAt,
@@ -1831,6 +1864,8 @@ const routeContext = {
   requireFields,
   normalizeEmail,
   normalizeUserRole,
+  normalizeStaffRole,
+  effectiveStaffRole,
   hasStaffPermission,
   parseId,
   dollarsToCents,

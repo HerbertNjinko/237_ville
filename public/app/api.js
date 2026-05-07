@@ -53,6 +53,11 @@ async function loadDashboard() {
   const data = await api("/api/dashboard");
   state.user = data.user;
   state.data = data;
+  if (!hasMemberPortal(state.user)) {
+    state.portalMode = "admin";
+  } else if (!isAdminPortalUser(state.user)) {
+    state.portalMode = "member";
+  }
   if (isAdminPortalUser(state.user) && !state.admin) {
     await loadAdminSummary();
   }

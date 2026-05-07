@@ -18,6 +18,8 @@ export async function handleFinancialRoutes(req, res, url, context) {
     requireFields,
     normalizeEmail,
     normalizeUserRole,
+    normalizeStaffRole,
+    effectiveStaffRole,
     hasStaffPermission,
     parseId,
     dollarsToCents,
@@ -223,13 +225,35 @@ export async function handleFinancialRoutes(req, res, url, context) {
     const firstName = String(payload.firstName || "").trim();
     const lastName = String(payload.lastName || "").trim();
     const fullName = buildFullName(firstName, lastName);
-    const role = normalizeUserRole(payload.role);
     const allowedStatuses = ["pending_approval", "pending_policy", "pending_fee", "active", "inactive", "suspended", "rejected"];
     const membershipStatus = allowedStatuses.includes(payload.membershipStatus) ? payload.membershipStatus : "active";
 
     requireFields({ ...payload, firstName, lastName, fullName }, ["email", "firstName", "lastName"]);
 
     try {
+      const currentResult = await query("SELECT id, role, staff_role FROM users WHERE id = $1 LIMIT 1", [memberId]);
+      const currentUser = currentResult.rows[0];
+      if (!currentUser) {
+        return sendError(res, 404, "Member not found.");
+      }
+
+      const requestedAccountRole = String(payload.accountRole || payload.role || currentUser.role || "member").trim().toLowerCase();
+      const accountRole = requestedAccountRole === "admin" ? "admin" : "member";
+      const legacyRole = normalizeUserRole(payload.role);
+      let staffRole = normalizeStaffRole(payload.staffRole);
+
+      if (!String(payload.staffRole || "").trim() && ["secretary", "treasurer", "social"].includes(legacyRole)) {
+        staffRole = legacyRole;
+      }
+
+      if (accountRole === "admin") {
+        staffRole = "";
+      }
+
+      if (Number(admin.id) === memberId && accountRole !== "admin" && staffRole !== "admin") {
+        return sendError(res, 400, "You cannot remove your own admin access.");
+      }
+
       const { rows } = await query(
         `
           UPDATE users
@@ -242,6 +266,18 @@ export async function handleFinancialRoutes(req, res, url, context) {
               state = $8,
               role = $9,
               membership_status = $10,
+              staff_role = $11,
+              staff_role_assigned_at = CASE
+                WHEN $11 <> '' AND COALESCE(staff_role, '') <> $11 THEN now()
+                WHEN $11 <> '' THEN COALESCE(staff_role_assigned_at, now())
+                ELSE NULL
+              END,
+              staff_role_revoked_at = CASE
+                WHEN $11 = '' AND COALESCE(staff_role, '') <> '' THEN now()
+                ELSE staff_role_revoked_at
+              END,
+              staff_role_assigned_by = CASE WHEN $11 <> '' THEN $12 ELSE staff_role_assigned_by END,
+              staff_role_note = $13,
               updated_at = now()
           WHERE id = $1
           RETURNING *
@@ -255,8 +291,11 @@ export async function handleFinancialRoutes(req, res, url, context) {
           String(payload.phone || ""),
           String(payload.city || ""),
           String(payload.state || ""),
-          role,
-          membershipStatus
+          accountRole,
+          membershipStatus,
+          staffRole,
+          admin.id,
+          String(payload.staffRoleNote || "").trim()
         ]
       );
 
@@ -271,6 +310,52 @@ export async function handleFinancialRoutes(req, res, url, context) {
       }
       throw error;
     }
+  }
+
+  const memberPasswordResetMatch = pathname.match(/^\/api\/admin\/members\/(\d+)\/reset-password$/);
+  if (method === "POST" && memberPasswordResetMatch) {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    const memberId = parseId(memberPasswordResetMatch[1]);
+    const payload = await readJson(req);
+    requireFields(payload, ["temporaryPassword"]);
+
+    if (String(payload.temporaryPassword).length < 8) {
+      return sendError(res, 400, "Temporary password must be at least 8 characters.");
+    }
+
+    if (Number(admin.id) === memberId) {
+      return sendError(res, 400, "Use Change Password from your account instead of resetting your own password here.");
+    }
+
+    const passwordHash = await hashPassword(payload.temporaryPassword);
+    const { rows } = await query(
+      `
+        UPDATE users
+        SET password_hash = $2,
+            password_must_change = TRUE,
+            updated_at = now()
+        WHERE id = $1
+          AND membership_status NOT IN ('rejected', 'inactive', 'suspended')
+        RETURNING *
+      `,
+      [memberId, passwordHash]
+    );
+
+    if (rows.length === 0) {
+      return sendError(res, 404, "Active account not found.");
+    }
+
+    await query("DELETE FROM sessions WHERE user_id = $1", [memberId]);
+    await createNotification(
+      memberId,
+      "password_reset",
+      "Password reset by admin",
+      "An admin reset your password. Sign in with the temporary password provided to you, then create a private password.",
+      "/"
+    );
+
+    return sendJson(res, 200, { member: toUser(rows[0]) });
   }
 
   const paymentStatusMatch = pathname.match(/^\/api\/admin\/payments\/(\d+)\/status$/);

@@ -16,6 +16,11 @@ CREATE TABLE IF NOT EXISTS users (
   identity_document_size INTEGER DEFAULT 0,
   identity_document_data_url TEXT DEFAULT '',
   role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('member', 'admin', 'secretary', 'treasurer', 'social')),
+  staff_role TEXT NOT NULL DEFAULT '' CHECK (staff_role IN ('', 'admin', 'secretary', 'treasurer', 'social')),
+  staff_role_assigned_at TIMESTAMPTZ,
+  staff_role_revoked_at TIMESTAMPTZ,
+  staff_role_assigned_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  staff_role_note TEXT DEFAULT '',
   membership_status TEXT NOT NULL DEFAULT 'pending_approval' CHECK (membership_status IN ('pending_approval', 'pending_policy', 'pending_fee', 'active', 'inactive', 'suspended', 'rejected')),
   notification_opt_in BOOLEAN NOT NULL DEFAULT TRUE,
   password_must_change BOOLEAN NOT NULL DEFAULT FALSE,
@@ -38,6 +43,11 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS identity_document_name TEXT DEFAULT '
 ALTER TABLE users ADD COLUMN IF NOT EXISTS identity_document_type TEXT DEFAULT '';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS identity_document_size INTEGER DEFAULT 0;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS identity_document_data_url TEXT DEFAULT '';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS staff_role TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS staff_role_assigned_at TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS staff_role_revoked_at TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS staff_role_assigned_by BIGINT REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS staff_role_note TEXT DEFAULT '';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS password_must_change BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS policy_accepted_at TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS policy_signature_name TEXT DEFAULT '';
@@ -49,6 +59,8 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS rejected_by BIGINT REFERENCES users(i
 ALTER TABLE users ADD COLUMN IF NOT EXISTS rejection_reason TEXT DEFAULT '';
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
 ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('member', 'admin', 'secretary', 'treasurer', 'social'));
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_staff_role_check;
+ALTER TABLE users ADD CONSTRAINT users_staff_role_check CHECK (staff_role IN ('', 'admin', 'secretary', 'treasurer', 'social'));
 ALTER TABLE users ALTER COLUMN membership_status SET DEFAULT 'pending_approval';
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_membership_status_check;
 ALTER TABLE users ADD CONSTRAINT users_membership_status_check CHECK (membership_status IN ('pending_approval', 'pending_policy', 'pending_fee', 'active', 'inactive', 'suspended', 'rejected'));
@@ -59,6 +71,14 @@ SET
     WHEN last_name = '' AND position(' ' in full_name) > 0 THEN substring(full_name from position(' ' in full_name) + 1)
     ELSE last_name
   END;
+UPDATE users
+SET
+  staff_role = role,
+  staff_role_assigned_at = COALESCE(staff_role_assigned_at, approved_at, created_at),
+  role = 'member',
+  updated_at = now()
+WHERE role IN ('secretary', 'treasurer', 'social')
+  AND COALESCE(staff_role, '') = '';
 
 CREATE TABLE IF NOT EXISTS sessions (
   id BIGSERIAL PRIMARY KEY,
@@ -616,3 +636,4 @@ CREATE INDEX IF NOT EXISTS idx_social_fund_requests_status ON social_fund_reques
 CREATE INDEX IF NOT EXISTS idx_social_fund_requests_assignment ON social_fund_requests(assignment_id, status);
 CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_users_membership_status ON users(membership_status);
+CREATE INDEX IF NOT EXISTS idx_users_staff_role ON users(staff_role) WHERE staff_role <> '';

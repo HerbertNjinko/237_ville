@@ -228,6 +228,35 @@ export async function handlePublicRoutes(req, res, url, context) {
     });
   }
 
+  if (method === "POST" && pathname === "/api/auth/forgot-password") {
+    const payload = await readJson(req);
+    requireFields(payload, ["email"]);
+    const email = normalizeEmail(payload.email);
+    const { rows } = await query(
+      `
+        SELECT id, full_name, email, membership_status
+        FROM users
+        WHERE email = $1
+        LIMIT 1
+      `,
+      [email]
+    );
+    const user = rows[0];
+
+    if (user && !["inactive", "suspended", "rejected"].includes(user.membership_status)) {
+      await notifyAdmins(
+        "password_reset",
+        "Password reset requested",
+        `${user.full_name} (${user.email}) requested a password reset. Open Members / Profile, generate a temporary password, and provide it to the member.`,
+        "/admin"
+      );
+    }
+
+    return sendJson(res, 200, {
+      message: "If that email belongs to an active 237 Ville account, an admin will receive a reset request."
+    });
+  }
+
   if (method === "POST" && pathname === "/api/auth/login") {
     const payload = await readJson(req);
     requireFields(payload, ["email", "password"]);

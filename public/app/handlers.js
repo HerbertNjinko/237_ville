@@ -92,6 +92,19 @@ async function handleSubmit(event) {
       return;
     }
 
+    if (action === "forgot-password") {
+      const result = await api("/api/auth/forgot-password", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      form.reset();
+      state.authMode = "login";
+      state.message = result.message || "Password reset request sent.";
+      state.messageType = "ok";
+      render();
+      return;
+    }
+
     if (action === "register") {
       const file = form.elements.identityDocument?.files?.[0];
 
@@ -618,6 +631,18 @@ async function handleSubmit(event) {
       return;
     }
 
+    if (action === "admin-reset-password") {
+      await api(`/api/admin/members/${form.dataset.memberId}/reset-password`, {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      form.reset();
+      state.message = "Temporary password set. Provide it to the user so they can sign in and create a private password.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
     if (action === "clear-old-notifications") {
       const result = await api("/api/admin/notifications/clear-old", {
         method: "POST",
@@ -714,6 +739,7 @@ async function handleClick(event) {
       state.data = null;
       state.admin = null;
       state.adminNotifications = null;
+      state.portalMode = "member";
       state.authMode = "home";
       await loadPublicPaymentDetails();
       await loadPublicAbout();
@@ -725,6 +751,16 @@ async function handleClick(event) {
 
     if (action === "refresh") {
       await refreshAll({ includeAdmin: isAdminPortalUser(state.user) });
+      return;
+    }
+
+    if (action === "switch-portal") {
+      state.portalMode = button.dataset.portalMode === "admin" ? "admin" : "member";
+      state.view = "overview";
+      if (state.portalMode === "admin" && !state.admin) {
+        await loadAdminSummary();
+      }
+      render();
       return;
     }
 

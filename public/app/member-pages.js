@@ -1,7 +1,9 @@
 function renderShell() {
-  const views = isAdminPortalUser() ? adminViews.filter(([key]) => canAccessAdminView(key)) : memberViews;
+  const adminMode = isAdminPortalMode();
+  const views = adminMode ? adminViews.filter(([key]) => canAccessAdminView(key)) : memberViews;
   const currentTitle = views.find(([key]) => key === state.view)?.[1] || "Overview";
   const unread = (state.data.notifications || []).filter((notification) => !notification.readAt).length;
+  const portalLabel = adminMode ? `${effectiveAdminRole()} portal` : "member portal";
 
   app.innerHTML = `
     <div class="dashboard-layout">
@@ -10,9 +12,17 @@ function renderShell() {
           <img src="${companyLogoSrc}" alt="237 Ville">
           <div>
             <strong>237 Ville</strong>
-            <span>${escapeHtml(state.user.role)} portal</span>
+            <span>${escapeHtml(portalLabel)}</span>
           </div>
         </div>
+        ${
+          hasBothPortals()
+            ? `<div class="portal-switcher" aria-label="Portal switcher">
+                <button class="tab-button ${!adminMode ? "active" : ""}" data-click="switch-portal" data-portal-mode="member" type="button">Member</button>
+                <button class="tab-button ${adminMode ? "active" : ""}" data-click="switch-portal" data-portal-mode="admin" type="button">Staff</button>
+              </div>`
+            : ""
+        }
         <nav class="side-nav" aria-label="Main navigation">
           ${views
             .map(
@@ -46,7 +56,7 @@ function renderShell() {
 }
 
 function topbarSubtitle() {
-  if (isAdminPortalUser()) {
+  if (isAdminPortalMode()) {
     const adminMap = {
       overview: "Backend statistics across members, money, content, events, votes, and notifications.",
       about: "Manage the public home articles, About page content, and leadership position images.",
@@ -82,7 +92,7 @@ function topbarSubtitle() {
 }
 
 function renderView() {
-  if (isAdminPortalUser()) {
+  if (isAdminPortalMode()) {
     if (!canAccessAdminView(state.view)) {
       state.view = "overview";
     }
@@ -191,7 +201,7 @@ function renderOverview() {
                 <p>Published updates for your account.</p>
               </div>
             </div>
-            ${canEditAdminView("notifications") ? renderNotificationCleanupForm("overview") : ""}
+            ${isAdminPortalMode() && canEditAdminView("notifications") ? renderNotificationCleanupForm("overview") : ""}
             ${renderNotificationList(state.data.notifications || [])}
           </div>
         </div>
