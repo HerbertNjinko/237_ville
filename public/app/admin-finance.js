@@ -952,7 +952,7 @@ function renderMembersTable() {
                     </div>`
               }
               ${
-                canManage && Number(member.id) !== Number(state.user.id) && !["inactive", "suspended", "rejected"].includes(member.membershipStatus)
+                canManage && Number(member.id) !== Number(state.user.id) && !["pending_approval", "inactive", "suspended", "rejected"].includes(member.membershipStatus)
                   ? `<form class="form-stack compact-form" data-action="admin-reset-password" data-member-id="${member.id}">
                       <label class="field">
                         <span>Temporary password</span>
@@ -962,6 +962,17 @@ function renderMembersTable() {
                         <button class="ghost-button" data-click="generate-temp-password" type="button">Generate password</button>
                         <button class="secondary-button" type="submit">Reset password</button>
                       </div>
+                    </form>`
+                  : ""
+              }
+              ${
+                canManage && member.membershipStatus === "pending_approval"
+                  ? `<form class="form-stack compact-form rejection-form" data-action="reject-member" data-member-id="${member.id}">
+                      <label class="field">
+                        <span>Reject account creation reason</span>
+                        <textarea name="reason" required placeholder="User is not recognized, ID could not be validated, or application details do not match."></textarea>
+                      </label>
+                      <button class="danger-button" type="submit">Reject account creation</button>
                     </form>`
                   : ""
               }

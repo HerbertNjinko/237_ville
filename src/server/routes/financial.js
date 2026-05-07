@@ -29,6 +29,9 @@ export async function handleFinancialRoutes(req, res, url, context) {
     validateIdentityDocument,
     validateImageUpload,
     validateReceiptUpload,
+    sendAccountApprovedEmail,
+    sendAccountRejectedEmail,
+    sendPasswordResetEmail,
     buildFullName,
     isLockedStatus,
     isOnboardingUser,
@@ -171,6 +174,7 @@ export async function handleFinancialRoutes(req, res, url, context) {
       return sendError(res, 404, "Pending member request not found.");
     }
 
+    const member = toUser(rows[0]);
     await createNotification(
       memberId,
       "account_approved",
@@ -178,8 +182,9 @@ export async function handleFinancialRoutes(req, res, url, context) {
       "Your 237 Ville account was approved. Use the temporary password provided by the admin, then update your password and complete onboarding.",
       "/"
     );
+    const email = await sendAccountApprovedEmail(member, payload.temporaryPassword);
 
-    return sendJson(res, 200, { member: toUser(rows[0]) });
+    return sendJson(res, 200, { member, email });
   }
 
   const memberRejectMatch = pathname.match(/^\/api\/admin\/members\/(\d+)\/reject$/);
@@ -212,8 +217,10 @@ export async function handleFinancialRoutes(req, res, url, context) {
     }
 
     await query("DELETE FROM sessions WHERE user_id = $1", [memberId]);
+    const member = toUser(rows[0]);
+    const email = await sendAccountRejectedEmail(member, reason);
 
-    return sendJson(res, 200, { member: toUser(rows[0]) });
+    return sendJson(res, 200, { member, email });
   }
 
   const memberUpdateMatch = pathname.match(/^\/api\/admin\/members\/(\d+)$/);
@@ -354,8 +361,10 @@ export async function handleFinancialRoutes(req, res, url, context) {
       "An admin reset your password. Sign in with the temporary password provided to you, then create a private password.",
       "/"
     );
+    const member = toUser(rows[0]);
+    const email = await sendPasswordResetEmail(member, payload.temporaryPassword);
 
-    return sendJson(res, 200, { member: toUser(rows[0]) });
+    return sendJson(res, 200, { member, email });
   }
 
   const paymentStatusMatch = pathname.match(/^\/api\/admin\/payments\/(\d+)\/status$/);

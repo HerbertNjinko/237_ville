@@ -71,6 +71,13 @@ async function receiptPayloadFromInput(input) {
   };
 }
 
+function emailDeliveryMessage(email, sentText) {
+  if (!email) return sentText;
+  if (email.sent) return `${sentText} Email sent.`;
+  if (email.status === "skipped") return `${sentText} Email not sent: ${email.detail}`;
+  return `${sentText} Email delivery failed: ${email.detail || "Check SMTP settings."}`;
+}
+
 async function handleSubmit(event) {
   const form = event.target.closest("form[data-action]");
   if (!form) return;
@@ -597,24 +604,24 @@ async function handleSubmit(event) {
     }
 
     if (action === "approve-member") {
-      await api(`/api/admin/members/${form.dataset.memberId}/approve`, {
+      const result = await api(`/api/admin/members/${form.dataset.memberId}/approve`, {
         method: "POST",
         body: JSON.stringify(payload)
       });
       form.reset();
-      state.message = "Member approved. Provide the temporary password to the member.";
+      state.message = emailDeliveryMessage(result.email, "Member approved.");
       state.messageType = "ok";
       await refreshAll({ includeAdmin: true });
       return;
     }
 
     if (action === "reject-member") {
-      await api(`/api/admin/members/${form.dataset.memberId}/reject`, {
+      const result = await api(`/api/admin/members/${form.dataset.memberId}/reject`, {
         method: "POST",
         body: JSON.stringify(payload)
       });
       form.reset();
-      state.message = "Member registration rejected.";
+      state.message = emailDeliveryMessage(result.email, "Member registration rejected.");
       state.messageType = "ok";
       await refreshAll({ includeAdmin: true });
       return;
@@ -632,12 +639,12 @@ async function handleSubmit(event) {
     }
 
     if (action === "admin-reset-password") {
-      await api(`/api/admin/members/${form.dataset.memberId}/reset-password`, {
+      const result = await api(`/api/admin/members/${form.dataset.memberId}/reset-password`, {
         method: "POST",
         body: JSON.stringify(payload)
       });
       form.reset();
-      state.message = "Temporary password set. Provide it to the user so they can sign in and create a private password.";
+      state.message = emailDeliveryMessage(result.email, "Temporary password set.");
       state.messageType = "ok";
       await refreshAll({ includeAdmin: true });
       return;

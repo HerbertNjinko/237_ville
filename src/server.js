@@ -17,6 +17,12 @@ import {
 import { config } from "./config.js";
 import { query, withTransaction } from "./postgres.js";
 import { bootstrapDefaultAdmin, runSchemaMigration } from "./setup.js";
+import {
+  sendAccountApprovedEmail,
+  sendAccountRejectedEmail,
+  sendNotificationEmail,
+  sendPasswordResetEmail
+} from "./mailer.js";
 
 import { handlePublicRoutes } from "./server/routes/public.js";
 import { handleContentRoutes } from "./server/routes/content.js";
@@ -328,27 +334,78 @@ function isOnboardingUser(user) {
 }
 
 async function createNotification(userId, type, title, body = "", link = "") {
-  await query(
+  const { rows } = await query(
     `
+      WITH inserted AS (
       INSERT INTO notifications (user_id, type, title, body, link)
       VALUES ($1, $2, $3, $4, $5)
+        RETURNING *
+      )
+      SELECT inserted.*,
+             users.email AS user_email,
+             users.full_name AS user_full_name,
+             users.first_name AS user_first_name
+      FROM inserted
+      JOIN users ON users.id = inserted.user_id
     `,
     [userId, type, title, body, link]
   );
+  await sendNotificationEmails(rows);
+  return rows[0] || null;
 }
 
 async function notifyAdmins(type, title, body = "", link = "/admin") {
-  await query(
+  const { rows } = await query(
     `
+      WITH recipients AS (
+        SELECT id, email, full_name, first_name
+        FROM users
+        WHERE (role = 'admin' OR staff_role = 'admin')
+          AND membership_status = 'active'
+          AND notification_opt_in = TRUE
+      ),
+      inserted AS (
       INSERT INTO notifications (user_id, type, title, body, link)
       SELECT id, $1, $2, $3, $4
-      FROM users
-      WHERE (role = 'admin' OR staff_role = 'admin')
-        AND membership_status = 'active'
-        AND notification_opt_in = TRUE
+        FROM recipients
+        RETURNING *
+      )
+      SELECT inserted.*,
+             recipients.email AS user_email,
+             recipients.full_name AS user_full_name,
+             recipients.first_name AS user_first_name
+      FROM inserted
+      JOIN recipients ON recipients.id = inserted.user_id
     `,
     [type, title, body, link]
   );
+  await sendNotificationEmails(rows);
+  return rows;
+}
+
+async function sendNotificationEmails(notificationRows = []) {
+  for (const row of notificationRows) {
+    try {
+      const email = await sendNotificationEmail(
+        {
+          email: row.user_email,
+          fullName: row.user_full_name,
+          firstName: row.user_first_name
+        },
+        {
+          title: row.title,
+          body: row.body,
+          link: row.link
+        }
+      );
+
+      if (email.status === "failed") {
+        console.warn(`Notification email failed for user ${row.user_id}: ${email.detail}`);
+      }
+    } catch (error) {
+      console.warn(`Notification email failed for user ${row.user_id}: ${error.message || "Unknown SMTP error"}`);
+    }
+  }
 }
 
 async function createSession(userId) {
@@ -436,13 +493,26 @@ async function requireStaffPermission(req, res, permission) {
 }
 
 async function createAnnouncementNotifications(announcement) {
-  await query(
+  const { rows } = await query(
     `
+      WITH recipients AS (
+        SELECT id, email, full_name, first_name
+        FROM users
+        WHERE notification_opt_in = TRUE
+          AND membership_status = 'active'
+      ),
+      inserted AS (
       INSERT INTO notifications (user_id, type, title, body, link)
       SELECT id, 'announcement', $1, $2, $3
-      FROM users
-      WHERE notification_opt_in = TRUE
-        AND membership_status = 'active'
+        FROM recipients
+        RETURNING *
+      )
+      SELECT inserted.*,
+             recipients.email AS user_email,
+             recipients.full_name AS user_full_name,
+             recipients.first_name AS user_first_name
+      FROM inserted
+      JOIN recipients ON recipients.id = inserted.user_id
     `,
     [
       announcement.title,
@@ -450,19 +520,36 @@ async function createAnnouncementNotifications(announcement) {
       `/announcements/${announcement.id}`
     ]
   );
+  await sendNotificationEmails(rows);
+  return rows;
 }
 
 async function notifyActiveMembers(type, title, body = "", link = "/") {
-  await query(
+  const { rows } = await query(
     `
+      WITH recipients AS (
+        SELECT id, email, full_name, first_name
+        FROM users
+        WHERE notification_opt_in = TRUE
+          AND membership_status = 'active'
+      ),
+      inserted AS (
       INSERT INTO notifications (user_id, type, title, body, link)
       SELECT id, $1, $2, $3, $4
-      FROM users
-      WHERE notification_opt_in = TRUE
-        AND membership_status = 'active'
+        FROM recipients
+        RETURNING *
+      )
+      SELECT inserted.*,
+             recipients.email AS user_email,
+             recipients.full_name AS user_full_name,
+             recipients.first_name AS user_first_name
+      FROM inserted
+      JOIN recipients ON recipients.id = inserted.user_id
     `,
     [type, title, body, link]
   );
+  await sendNotificationEmails(rows);
+  return rows;
 }
 
 async function listAnnouncements(limit = 30) {
@@ -1875,6 +1962,9 @@ const routeContext = {
   validateIdentityDocument,
   validateImageUpload,
   validateReceiptUpload,
+  sendAccountApprovedEmail,
+  sendAccountRejectedEmail,
+  sendPasswordResetEmail,
   buildFullName,
   isLockedStatus,
   isOnboardingUser,
@@ -1958,6 +2048,21 @@ async function handleApi(req, res, url) {
   return sendError(res, 404, "API route not found.");
 }
 
+function staticHeaders(filePath) {
+  const extension = extname(filePath);
+  const headers = {
+    "Content-Type": mimeTypes[extension] || "application/octet-stream"
+  };
+
+  if ([".html", ".js", ".css"].includes(extension)) {
+    headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
+    headers.Pragma = "no-cache";
+    headers.Expires = "0";
+  }
+
+  return headers;
+}
+
 async function serveStatic(req, res, url) {
   let pathname = decodeURIComponent(url.pathname);
 
@@ -1975,12 +2080,10 @@ async function serveStatic(req, res, url) {
   try {
     const filePath = pathname.includes(".") ? requestedPath : join(publicDir, "index.html");
     await readFile(filePath);
-    res.writeHead(200, {
-      "Content-Type": mimeTypes[extname(filePath)] || "application/octet-stream"
-    });
+    res.writeHead(200, staticHeaders(filePath));
     createReadStream(filePath).pipe(res);
   } catch {
-    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.writeHead(200, staticHeaders(join(publicDir, "index.html")));
     createReadStream(join(publicDir, "index.html")).pipe(res);
   }
 }
