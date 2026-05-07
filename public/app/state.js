@@ -53,7 +53,7 @@ const memberViews = [
 
 const adminViews = [
   ["overview", "Overview"],
-  ["about", "About"],
+  ["about", "Publish Articles"],
   ["announcements", "Announcements"],
   ["questions", "Questions"],
   ["events", "Events"],

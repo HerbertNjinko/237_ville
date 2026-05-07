@@ -67,7 +67,7 @@ function topbarSubtitle() {
   if (isAdminPortalMode()) {
     const adminMap = {
       overview: "Backend statistics across members, money, content, events, votes, and notifications.",
-      about: "Manage the public home articles, About page content, and leadership position images.",
+      about: "Publish and manage public articles, About page content, and leadership position images.",
       announcements: "Publish and review organization announcements and member-sourced articles.",
       questions: "Review member questions, publish discussions, or turn submissions into articles.",
       events: "Create and manage organization events.",

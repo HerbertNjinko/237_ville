@@ -1695,7 +1695,7 @@ async function archivePastSocialItems() {
     `
       UPDATE social_assignments
       SET status = 'archived',
-          archived_at = COALESCE(archived_at, now()),
+          archived_at = COALESCE(social_assignments.archived_at, now()),
           updated_at = now()
       FROM social_meetings
       WHERE social_assignments.meeting_id = social_meetings.id
@@ -1708,7 +1708,7 @@ async function archivePastSocialItems() {
     `
       UPDATE social_assignments
       SET status = 'archived',
-          archived_at = COALESCE(archived_at, now()),
+          archived_at = COALESCE(social_assignments.archived_at, now()),
           updated_at = now()
       FROM events
       WHERE social_assignments.event_id = events.id
