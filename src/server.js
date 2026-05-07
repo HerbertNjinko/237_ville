@@ -2109,7 +2109,11 @@ const server = createServer(async (req, res) => {
 
 await runSchemaMigration();
 const defaultAdmin = await bootstrapDefaultAdmin();
-console.log(`Default admin checked: ${defaultAdmin.email}`);
+console.log(
+  defaultAdmin.created
+    ? `Default admin created: ${defaultAdmin.email}. First login requires a password change.`
+    : `Default admin checked: ${defaultAdmin.email}`
+);
 
 server.listen(config.port, () => {
   console.log(`237 Ville is running at http://localhost:${config.port}`);

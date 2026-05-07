@@ -17,6 +17,8 @@ function normalizeAppUrl(value, fallbackPort) {
 
 const port = Number(process.env.PORT || 4173);
 const defaultAdminEmail = (process.env.ADMIN_EMAIL || "admin@237ville.org").toLowerCase();
+const defaultAdminTemporaryPassword =
+  process.env.ADMIN_TEMPORARY_PASSWORD || process.env.ADMIN_PASSWORD || "ChangeMe237!";
 const smtpHost = String(process.env.SMTP_HOST || "").trim();
 const smtpEnabledValue = String(process.env.SMTP_ENABLED || "").trim().toLowerCase();
 const smtpSecureValue = String(process.env.SMTP_SECURE || "").trim().toLowerCase();
@@ -27,7 +29,7 @@ export const config = {
   sessionSecret: process.env.SESSION_SECRET || "dev-session-secret-change-me",
   defaultAdmin: {
     email: defaultAdminEmail,
-    password: process.env.ADMIN_PASSWORD || "ChangeMe237!",
+    temporaryPassword: defaultAdminTemporaryPassword,
     firstName: process.env.ADMIN_FIRST_NAME || "",
     lastName: process.env.ADMIN_LAST_NAME || "",
     fullName: process.env.ADMIN_NAME || "237 Ville Admin"

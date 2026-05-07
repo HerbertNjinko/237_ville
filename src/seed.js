@@ -4,7 +4,11 @@ import { bootstrapDefaultAdmin, runSchemaMigration } from "./setup.js";
 try {
   await runSchemaMigration();
   const admin = await bootstrapDefaultAdmin();
-  console.log(`Admin ready: ${admin.email}`);
+  console.log(
+    admin.created
+      ? `Admin created: ${admin.email}. First login requires a password change.`
+      : `Admin ready: ${admin.email}`
+  );
 } finally {
   await closeDatabasePool();
 }

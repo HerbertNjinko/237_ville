@@ -27,10 +27,22 @@ export async function bootstrapDefaultAdmin() {
   const firstName = String(admin.firstName || fallback.firstName).trim();
   const lastName = String(admin.lastName || fallback.lastName).trim();
   const fullName = String(admin.fullName || `${firstName} ${lastName}`).trim();
-  const passwordHash = await hashPassword(admin.password);
+  const temporaryPassword = String(admin.temporaryPassword || "").trim();
+  if (temporaryPassword.length < 8) {
+    throw new Error("ADMIN_TEMPORARY_PASSWORD must be at least 8 characters.");
+  }
+
+  const passwordHash = await hashPassword(temporaryPassword);
 
   const { rows } = await query(
     `
+      WITH existing_admin AS (
+        SELECT id
+        FROM users
+        WHERE email = $1
+        LIMIT 1
+      ),
+      upserted_admin AS (
       INSERT INTO users (
         email,
         password_hash,
@@ -54,7 +66,11 @@ export async function bootstrapDefaultAdmin() {
         approved_at = COALESCE(users.approved_at, now()),
         password_must_change = CASE WHEN users.approved_at IS NULL THEN TRUE ELSE users.password_must_change END,
         updated_at = now()
-      RETURNING id, email, password_must_change
+        RETURNING id, email, password_must_change
+      )
+      SELECT upserted_admin.*,
+             NOT EXISTS (SELECT 1 FROM existing_admin) AS created
+      FROM upserted_admin
     `,
     [admin.email, passwordHash, firstName, lastName, fullName]
   );
