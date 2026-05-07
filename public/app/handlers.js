@@ -50,6 +50,27 @@ async function imagePayloadFromInput(input) {
   };
 }
 
+async function receiptPayloadFromInput(input) {
+  const file = input?.files?.[0];
+  if (!file) return null;
+
+  if (file.size > 5_000_000) {
+    throw new Error("Receipt file must be 5 MB or smaller.");
+  }
+
+  const acceptedTypes = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
+  if (!acceptedTypes.includes(file.type)) {
+    throw new Error("Receipt must be a JPG, PNG, WebP, or PDF file.");
+  }
+
+  return {
+    name: file.name,
+    type: file.type,
+    size: file.size,
+    dataUrl: await fileToDataUrl(file)
+  };
+}
+
 async function handleSubmit(event) {
   const form = event.target.closest("form[data-action]");
   if (!form) return;
@@ -473,6 +494,7 @@ async function handleSubmit(event) {
     }
 
     if (action === "create-expenditure") {
+      payload.receipt = await receiptPayloadFromInput(form.elements.receipt);
       await api("/api/admin/expenditures", {
         method: "POST",
         body: JSON.stringify(payload)
@@ -508,6 +530,7 @@ async function handleSubmit(event) {
     }
 
     if (action === "admin-budget-expense") {
+      payload.receipt = await receiptPayloadFromInput(form.elements.receipt);
       await api(`/api/admin/budgets/${form.dataset.budgetId}/expenses`, {
         method: "POST",
         body: JSON.stringify(payload)
@@ -520,6 +543,7 @@ async function handleSubmit(event) {
     }
 
     if (action === "member-budget-expense") {
+      payload.receipt = await receiptPayloadFromInput(form.elements.receipt);
       await api(`/api/budgets/${form.dataset.budgetId}/expenses`, {
         method: "POST",
         body: JSON.stringify(payload)

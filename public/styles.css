@@ -775,6 +775,18 @@ a {
   font-size: 0.88rem;
 }
 
+.receipt-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.receipt-actions a {
+  color: var(--primary);
+  font-weight: 700;
+}
+
 .metric {
   padding: 14px;
 }

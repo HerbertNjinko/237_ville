@@ -414,6 +414,11 @@ function renderBudgetExpenseForm(budget) {
         <textarea name="note"></textarea>
       </label>
       <label class="field">
+        <span>Receipt attachment</span>
+        <input name="receipt" type="file" accept="image/jpeg,image/png,image/webp,application/pdf">
+        <small>JPG, PNG, WebP, or PDF. 5 MB max.</small>
+      </label>
+      <label class="field">
         <span>Visibility</span>
         <select name="status">
           <option value="draft">Admin only</option>
@@ -457,6 +462,11 @@ function renderExpenditureForm() {
         <textarea name="note"></textarea>
       </label>
       <label class="field">
+        <span>Receipt attachment</span>
+        <input name="receipt" type="file" accept="image/jpeg,image/png,image/webp,application/pdf">
+        <small>JPG, PNG, WebP, or PDF. 5 MB max.</small>
+      </label>
+      <label class="field">
         <span>Visibility</span>
         <select name="status">
           <option value="draft">Admin only</option>
@@ -492,6 +502,7 @@ function renderExpenditureTable(expenditures) {
                     ${escapeHtml(expense.title)}
                     <br><span class="muted">${escapeHtml([expense.category, expense.vendor].filter(Boolean).join(" | "))}</span>
                     ${expense.note ? `<br><span class="muted">${escapeHtml(expense.note)}</span>` : ""}
+                    ${expense.receipt?.name || expense.receipt?.dataUrl ? `<br>${renderReceiptActions(expense.receipt)}` : ""}
                   </td>
                   <td>${formatMoney(expense.amountCents)}</td>
                   <td>${formatDate(expense.expenseDate, { dateOnly: true })}</td>

@@ -260,6 +260,36 @@ function validateImageUpload(image) {
   return { name, type, size, dataUrl };
 }
 
+function validateReceiptUpload(receipt) {
+  if (!receipt || typeof receipt !== "object" || !String(receipt.dataUrl || "").trim()) {
+    return { name: "", type: "", size: 0, dataUrl: "" };
+  }
+
+  const name = String(receipt.name || "").trim();
+  const type = String(receipt.type || "").trim();
+  const size = Number(receipt.size || 0);
+  const dataUrl = String(receipt.dataUrl || "");
+  const acceptedTypes = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
+
+  if (!name || !type || !dataUrl) {
+    throw Object.assign(new Error("Receipt upload is incomplete."), { statusCode: 400 });
+  }
+
+  if (!acceptedTypes.includes(type)) {
+    throw Object.assign(new Error("Receipt must be a JPG, PNG, WebP, or PDF file."), { statusCode: 400 });
+  }
+
+  if (!Number.isFinite(size) || size <= 0 || size > 5_000_000) {
+    throw Object.assign(new Error("Receipt must be 5 MB or smaller."), { statusCode: 400 });
+  }
+
+  if (!dataUrl.startsWith(`data:${type};base64,`)) {
+    throw Object.assign(new Error("Receipt upload is not valid."), { statusCode: 400 });
+  }
+
+  return { name, type, size, dataUrl };
+}
+
 function buildFullName(firstName, lastName) {
   return [firstName, lastName].map((part) => String(part || "").trim()).filter(Boolean).join(" ");
 }
@@ -898,7 +928,16 @@ async function requireEnabledPaymentDetail(method) {
   return detail;
 }
 
-function toExpenditure(row) {
+function toReceiptAttachment(row, { includeData = true } = {}) {
+  return {
+    name: row.receipt_name || "",
+    type: row.receipt_type || "",
+    size: Number(row.receipt_size || 0),
+    dataUrl: includeData ? row.receipt_data_url || "" : ""
+  };
+}
+
+function toExpenditure(row, { includeReceiptData = true } = {}) {
   return {
     id: Number(row.id),
     title: row.title,
@@ -907,6 +946,7 @@ function toExpenditure(row) {
     amountCents: Number(row.amount_cents),
     expenseDate: row.expense_date,
     note: row.note || "",
+    receipt: toReceiptAttachment(row, { includeData: includeReceiptData }),
     status: row.status,
     createdBy: row.created_by ? Number(row.created_by) : null,
     publishedAt: row.published_at,
@@ -923,7 +963,7 @@ function normalizeDepartmentBudgetExpenseStatus(value) {
   return value === "published" ? "published" : "draft";
 }
 
-async function listExpenditures({ publishedOnly = false, limit = 100 } = {}) {
+async function listExpenditures({ publishedOnly = false, limit = 100, includeReceiptData = true } = {}) {
   const { rows } = await query(
     `
       SELECT *
@@ -935,10 +975,10 @@ async function listExpenditures({ publishedOnly = false, limit = 100 } = {}) {
     [Boolean(publishedOnly), limit]
   );
 
-  return rows.map(toExpenditure);
+  return rows.map((row) => toExpenditure(row, { includeReceiptData }));
 }
 
-function toDepartmentBudgetExpense(row) {
+function toDepartmentBudgetExpense(row, { includeReceiptData = true } = {}) {
   return {
     id: Number(row.id),
     budgetId: Number(row.budget_id),
@@ -949,6 +989,7 @@ function toDepartmentBudgetExpense(row) {
     amountCents: Number(row.amount_cents || 0),
     expenseDate: row.expense_date,
     note: row.note || "",
+    receipt: toReceiptAttachment(row, { includeData: includeReceiptData }),
     status: row.status,
     createdBy: row.created_by ? Number(row.created_by) : null,
     createdByName: row.created_by_name || "",
@@ -988,7 +1029,7 @@ function toDepartmentBudget(row, expenses = []) {
   };
 }
 
-async function listDepartmentBudgets({ includeAll = false, user = null } = {}) {
+async function listDepartmentBudgets({ includeAll = false, user = null, includeReceiptData = includeAll } = {}) {
   const userId = user?.id ? Number(user.id) : 0;
   const budgetsResult = await query(
     `
@@ -1036,7 +1077,7 @@ async function listDepartmentBudgets({ includeAll = false, user = null } = {}) {
     [Boolean(includeAll), userId]
   );
 
-  const expenses = expensesResult.rows.map(toDepartmentBudgetExpense);
+  const expenses = expensesResult.rows.map((row) => toDepartmentBudgetExpense(row, { includeReceiptData }));
   return budgetsResult.rows.map((row) => toDepartmentBudget(row, expenses));
 }
 
@@ -1115,8 +1156,8 @@ async function listPublishedFinancials(user = null) {
     `
   );
 
-  const expenditures = await listExpenditures({ publishedOnly: true, limit: 100 });
-  const budgets = await listDepartmentBudgets({ user });
+  const expenditures = await listExpenditures({ publishedOnly: true, limit: 100, includeReceiptData: false });
+  const budgets = await listDepartmentBudgets({ user, includeReceiptData: false });
   const financialSummary = await getFinancialSummary();
   const donationRows = donations.rows.map((row) => ({
     id: Number(row.id),
@@ -1798,6 +1839,7 @@ const routeContext = {
   normalizePaymentRecordDetails,
   validateIdentityDocument,
   validateImageUpload,
+  validateReceiptUpload,
   buildFullName,
   isLockedStatus,
   isOnboardingUser,

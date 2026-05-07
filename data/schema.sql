@@ -324,6 +324,10 @@ CREATE TABLE IF NOT EXISTS expenditures (
   amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
   expense_date DATE NOT NULL DEFAULT CURRENT_DATE,
   note TEXT DEFAULT '',
+  receipt_name TEXT DEFAULT '',
+  receipt_type TEXT DEFAULT '',
+  receipt_size INTEGER DEFAULT 0,
+  receipt_data_url TEXT DEFAULT '',
   status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published')),
   created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
   published_at TIMESTAMPTZ,
@@ -335,6 +339,10 @@ ALTER TABLE expenditures ADD COLUMN IF NOT EXISTS category TEXT DEFAULT '';
 ALTER TABLE expenditures ADD COLUMN IF NOT EXISTS vendor TEXT DEFAULT '';
 ALTER TABLE expenditures ADD COLUMN IF NOT EXISTS expense_date DATE NOT NULL DEFAULT CURRENT_DATE;
 ALTER TABLE expenditures ADD COLUMN IF NOT EXISTS note TEXT DEFAULT '';
+ALTER TABLE expenditures ADD COLUMN IF NOT EXISTS receipt_name TEXT DEFAULT '';
+ALTER TABLE expenditures ADD COLUMN IF NOT EXISTS receipt_type TEXT DEFAULT '';
+ALTER TABLE expenditures ADD COLUMN IF NOT EXISTS receipt_size INTEGER DEFAULT 0;
+ALTER TABLE expenditures ADD COLUMN IF NOT EXISTS receipt_data_url TEXT DEFAULT '';
 ALTER TABLE expenditures ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'draft';
 ALTER TABLE expenditures ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;
 ALTER TABLE expenditures DROP CONSTRAINT IF EXISTS expenditures_status_check;
@@ -378,6 +386,10 @@ CREATE TABLE IF NOT EXISTS department_budget_expenses (
   amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
   expense_date DATE NOT NULL DEFAULT CURRENT_DATE,
   note TEXT DEFAULT '',
+  receipt_name TEXT DEFAULT '',
+  receipt_type TEXT DEFAULT '',
+  receipt_size INTEGER DEFAULT 0,
+  receipt_data_url TEXT DEFAULT '',
   status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published')),
   created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
   published_at TIMESTAMPTZ,
@@ -388,6 +400,10 @@ CREATE TABLE IF NOT EXISTS department_budget_expenses (
 ALTER TABLE department_budget_expenses ADD COLUMN IF NOT EXISTS vendor TEXT DEFAULT '';
 ALTER TABLE department_budget_expenses ADD COLUMN IF NOT EXISTS expense_date DATE NOT NULL DEFAULT CURRENT_DATE;
 ALTER TABLE department_budget_expenses ADD COLUMN IF NOT EXISTS note TEXT DEFAULT '';
+ALTER TABLE department_budget_expenses ADD COLUMN IF NOT EXISTS receipt_name TEXT DEFAULT '';
+ALTER TABLE department_budget_expenses ADD COLUMN IF NOT EXISTS receipt_type TEXT DEFAULT '';
+ALTER TABLE department_budget_expenses ADD COLUMN IF NOT EXISTS receipt_size INTEGER DEFAULT 0;
+ALTER TABLE department_budget_expenses ADD COLUMN IF NOT EXISTS receipt_data_url TEXT DEFAULT '';
 ALTER TABLE department_budget_expenses ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'draft';
 ALTER TABLE department_budget_expenses ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;
 ALTER TABLE department_budget_expenses DROP CONSTRAINT IF EXISTS department_budget_expenses_amount_cents_check;

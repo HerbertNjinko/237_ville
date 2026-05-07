@@ -162,11 +162,33 @@ function formatBytes(bytes = 0) {
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function renderReceiptActions(receipt) {
+  if (!receipt?.name && !receipt?.dataUrl) return "";
+
+  const name = receipt.name || "Receipt";
+  const size = receipt.size ? ` (${formatBytes(receipt.size)})` : "";
+
+  if (!receipt.dataUrl) {
+    return `<span class="muted">Receipt: ${escapeHtml(name)}${escapeHtml(size)}</span>`;
+  }
+
+  const href = escapeHtml(receipt.dataUrl);
+  const downloadName = escapeHtml(name);
+
+  return `
+    <span class="receipt-actions">
+      <span class="muted">Receipt: ${escapeHtml(name)}${escapeHtml(size)}</span>
+      <a href="${href}" target="_blank" rel="noopener">View</a>
+      <a href="${href}" download="${downloadName}">Download</a>
+    </span>
+  `;
+}
+
 function fileToDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.addEventListener("load", () => resolve(reader.result));
-    reader.addEventListener("error", () => reject(new Error("Unable to read ID card file.")));
+    reader.addEventListener("error", () => reject(new Error("Unable to read uploaded file.")));
     reader.readAsDataURL(file);
   });
 }

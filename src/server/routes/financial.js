@@ -26,6 +26,7 @@ export async function handleFinancialRoutes(req, res, url, context) {
     normalizePaymentRecordDetails,
     validateIdentityDocument,
     validateImageUpload,
+    validateReceiptUpload,
     buildFullName,
     isLockedStatus,
     isOnboardingUser,
@@ -380,6 +381,7 @@ export async function handleFinancialRoutes(req, res, url, context) {
 
     const amountCents = dollarsToCents(payload.amount);
     const status = payload.status === "published" ? "published" : "draft";
+    const receipt = validateReceiptUpload(payload.receipt);
     const { rows } = await query(
       `
         INSERT INTO expenditures (
@@ -389,11 +391,15 @@ export async function handleFinancialRoutes(req, res, url, context) {
           amount_cents,
           expense_date,
           note,
+          receipt_name,
+          receipt_type,
+          receipt_size,
+          receipt_data_url,
           status,
           created_by,
           published_at
         )
-        VALUES ($1, $2, $3, $4, COALESCE(NULLIF($5, '')::date, CURRENT_DATE), $6, $7, $8, CASE WHEN $7 = 'published' THEN now() ELSE NULL END)
+        VALUES ($1, $2, $3, $4, COALESCE(NULLIF($5, '')::date, CURRENT_DATE), $6, $7, $8, $9, $10, $11, $12, CASE WHEN $11 = 'published' THEN now() ELSE NULL END)
         RETURNING *
       `,
       [
@@ -403,6 +409,10 @@ export async function handleFinancialRoutes(req, res, url, context) {
         amountCents,
         String(payload.expenseDate || "").trim(),
         String(payload.note || "").trim(),
+        receipt.name,
+        receipt.type,
+        receipt.size,
+        receipt.dataUrl,
         status,
         admin.id
       ]
@@ -596,6 +606,7 @@ export async function handleFinancialRoutes(req, res, url, context) {
     const payload = await readJson(req);
     requireFields(payload, ["title", "amount"]);
     const amountCents = dollarsToCents(payload.amount);
+    const receipt = validateReceiptUpload(payload.receipt);
     const status = normalizeDepartmentBudgetExpenseStatus(payload.status);
 
     const budgetResult = await query("SELECT * FROM department_budgets WHERE id = $1", [budgetId]);
@@ -613,11 +624,15 @@ export async function handleFinancialRoutes(req, res, url, context) {
           amount_cents,
           expense_date,
           note,
+          receipt_name,
+          receipt_type,
+          receipt_size,
+          receipt_data_url,
           status,
           created_by,
           published_at
         )
-        VALUES ($1, $2, $3, $4, COALESCE(NULLIF($5, '')::date, CURRENT_DATE), $6, $7, $8, CASE WHEN $7 = 'published' THEN now() ELSE NULL END)
+        VALUES ($1, $2, $3, $4, COALESCE(NULLIF($5, '')::date, CURRENT_DATE), $6, $7, $8, $9, $10, $11, $12, CASE WHEN $11 = 'published' THEN now() ELSE NULL END)
         RETURNING *
       `,
       [
@@ -627,6 +642,10 @@ export async function handleFinancialRoutes(req, res, url, context) {
         amountCents,
         String(payload.expenseDate || "").trim(),
         String(payload.note || "").trim(),
+        receipt.name,
+        receipt.type,
+        receipt.size,
+        receipt.dataUrl,
         status,
         admin.id
       ]
@@ -655,6 +674,7 @@ export async function handleFinancialRoutes(req, res, url, context) {
     const payload = await readJson(req);
     requireFields(payload, ["title", "amount"]);
     const amountCents = dollarsToCents(payload.amount);
+    const receipt = validateReceiptUpload(payload.receipt);
 
     const budgetResult = await query(
       "SELECT * FROM department_budgets WHERE id = $1 AND assigned_to = $2 AND status = 'published'",
@@ -674,10 +694,14 @@ export async function handleFinancialRoutes(req, res, url, context) {
           amount_cents,
           expense_date,
           note,
+          receipt_name,
+          receipt_type,
+          receipt_size,
+          receipt_data_url,
           status,
           created_by
         )
-        VALUES ($1, $2, $3, $4, COALESCE(NULLIF($5, '')::date, CURRENT_DATE), $6, 'draft', $7)
+        VALUES ($1, $2, $3, $4, COALESCE(NULLIF($5, '')::date, CURRENT_DATE), $6, $7, $8, $9, $10, 'draft', $11)
         RETURNING *
       `,
       [
@@ -687,6 +711,10 @@ export async function handleFinancialRoutes(req, res, url, context) {
         amountCents,
         String(payload.expenseDate || "").trim(),
         String(payload.note || "").trim(),
+        receipt.name,
+        receipt.type,
+        receipt.size,
+        receipt.dataUrl,
         user.id
       ]
     );

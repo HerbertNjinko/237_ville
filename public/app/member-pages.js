@@ -444,6 +444,7 @@ function renderBudgetExpenseList(expenses, { adminMode = false, emptyText = "No 
                 ${expense.createdByName ? `<span>${escapeHtml(expense.createdByName)}</span>` : ""}
                 <span>${formatDate(expense.expenseDate, { dateOnly: true })}</span>
                 <span>${escapeHtml(statusLabel(expense.status))}</span>
+                ${expense.receipt?.dataUrl ? renderReceiptActions(expense.receipt) : ""}
               </div>
               ${
                 adminMode && expense.status !== "published"
@@ -492,6 +493,11 @@ function renderAssignedBudgetExpenseForms(budgets) {
             <label class="field">
               <span>Notes</span>
               <textarea name="note"></textarea>
+            </label>
+            <label class="field">
+              <span>Receipt attachment</span>
+              <input name="receipt" type="file" accept="image/jpeg,image/png,image/webp,application/pdf">
+              <small>JPG, PNG, WebP, or PDF. 5 MB max.</small>
             </label>
             <button class="secondary-button" type="submit">Submit expense</button>
           </form>
