@@ -776,6 +776,24 @@ a {
   margin: 0 0 10px;
 }
 
+.rich-text {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 10px;
+}
+
+.rich-text p,
+.item-card .rich-text p,
+.public-article-card .rich-text p {
+  margin: 0;
+  line-height: 1.55;
+}
+
+.public-article-card .rich-text {
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
 .event-admin-card,
 .social-meeting-card,
 .social-subsection,

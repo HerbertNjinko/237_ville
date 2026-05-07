@@ -750,7 +750,7 @@ function renderAdminQuestions() {
               <div class="panel-header">
                 <div>
                   <h4>#${question.id} ${escapeHtml(question.title)}</h4>
-                  <p>${escapeHtml(question.body)}</p>
+                  ${renderRichText(question.body)}
                 </div>
                 ${statusPill(question.status)}
               </div>

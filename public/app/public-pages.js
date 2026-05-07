@@ -297,7 +297,7 @@ function renderPublicAboutArticles(articles) {
               }
               <div>
                 <h4>${escapeHtml(article.title)}</h4>
-                <p>${escapeHtml(article.body)}</p>
+                ${renderRichText(article.body)}
                 <div class="item-meta">
                   <span>${formatDate(article.createdAt)}</span>
                 </div>

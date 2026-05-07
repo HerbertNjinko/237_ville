@@ -255,7 +255,7 @@ function renderAnnouncementList(announcements) {
           (announcement) => `
             <article class="item-card" id="announcement-${announcement.id}">
               <h4>${escapeHtml(announcement.title)}</h4>
-              <p>${escapeHtml(announcement.body)}</p>
+              ${renderRichText(announcement.body)}
               <div class="item-meta">
                 <span>${escapeHtml(announcement.category)}</span>
                 <span>${escapeHtml(announcement.authorName)}</span>
@@ -745,7 +745,7 @@ function renderQuestionCard(question) {
   return `
     <article class="item-card">
       <h4>${escapeHtml(question.title)}</h4>
-      <p>${escapeHtml(question.body)}</p>
+      ${renderRichText(question.body)}
       <div class="item-meta">
         <span>${escapeHtml(question.authorName)}</span>
         <span>${formatDate(question.publishedAt || question.createdAt)}</span>
@@ -756,7 +756,7 @@ function renderQuestionCard(question) {
             (comment) => `
               <div class="comment">
                 <strong>${escapeHtml(comment.authorName)}</strong>
-                <p>${escapeHtml(comment.body)}</p>
+                ${renderRichText(comment.body)}
                 <span class="muted">${formatDate(comment.createdAt)}</span>
               </div>
             `

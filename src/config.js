@@ -1,6 +1,11 @@
 import dotenv from "dotenv";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-dotenv.config();
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const appEnvPath = join(__dirname, "..", ".env");
+
+dotenv.config({ path: appEnvPath });
 
 function normalizeAppUrl(value, fallbackPort) {
   const fallback = `http://localhost:${fallbackPort}`;

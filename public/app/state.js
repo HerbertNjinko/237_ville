@@ -162,6 +162,24 @@ function escapeHtml(value = "") {
     .replaceAll("'", "&#039;");
 }
 
+function renderRichText(value = "") {
+  const normalized = String(value || "").replace(/\r\n?/g, "\n").trim();
+  if (!normalized) return "";
+
+  const paragraphs = normalized
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+
+  return `
+    <div class="rich-text">
+      ${paragraphs
+        .map((paragraph) => `<p>${escapeHtml(paragraph).replaceAll("\n", "<br>")}</p>`)
+        .join("")}
+    </div>
+  `;
+}
+
 function formatDate(value, options = {}) {
   if (!value) return "Not set";
   const date = options.dateOnly && /^\d{4}-\d{2}-\d{2}/.test(String(value))
