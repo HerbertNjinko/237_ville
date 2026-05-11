@@ -32,7 +32,7 @@ import { handleAboutRoutes } from "./server/routes/about.js";
 import { handleNotificationRoutes } from "./server/routes/notifications.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const publicDir = join(__dirname, "..", "public");
+const publicDir = join(__dirname, "..", "..", "frontend");
 const paymentMethods = new Set(["cash", "cash_app", "venmo", "zelle", "paypal", "cheque", "bank_account"]);
 const userRoles = new Set(["member", "admin", "secretary", "treasurer", "social"]);
 const staffRoles = new Set(["admin", "secretary", "treasurer", "social"]);

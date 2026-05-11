@@ -19,6 +19,15 @@
 - Dues and donation records for members, with admin payment review.
 - Admin tools for members, announcements, events, questions, ballots, and payments.
 
+## Project layout
+
+```text
+237_ville/
+├── frontend/   # Static browser app served by the backend
+├── backend/    # Node/Postgres API and server
+└── .gitignore
+```
+
 ## Local setup
 
 1. Create the Postgres database if it does not already exist:
@@ -27,9 +36,10 @@
    createdb organization_237
    ```
 
-2. Copy the example environment file:
+2. Move into the backend app and copy the example environment file:
 
    ```bash
+   cd backend
    cp .env.example .env
    ```
 
@@ -63,6 +73,14 @@
    ```
 
    Then open `http://localhost:4173`.
+
+## Render setup
+
+- Root Directory: `237_ville/backend` if the repository contains the `237_ville` folder. Use `backend` if `237_ville` is already the repository root.
+- Build Command: `npm install`
+- Start Command: `npm start`
+- Add the values from `backend/.env.example` as Render environment variables. Do not upload `.env`.
+- The backend serves the browser app from the sibling `frontend/` directory.
 
 ## Voting privacy note
 
