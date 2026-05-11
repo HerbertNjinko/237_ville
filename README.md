@@ -76,10 +76,10 @@
 
 ## Render setup
 
-- Root Directory: `237_ville/backend` if the repository contains the `237_ville` folder. Use `backend` if `237_ville` is already the repository root.
-- Build Command: `npm install`
-- Start Command: `npm start`
-- Add the values from `backend/.env.example` as Render environment variables. Do not upload `.env`.
+- Use the root `render.yaml` Blueprint for the web service and Postgres database.
+- The Blueprint builds from the repository root, runs backend commands with `cd backend`, and keeps frontend changes eligible for auto-deploys.
+- The Blueprint prompts for secret values marked `sync: false`, including the admin temporary password and SMTP credentials.
+- Do not upload `.env`. Use `backend/.env.example` only as a reference for required environment variables.
 - The backend serves the browser app from the sibling `frontend/` directory.
 
 ## Voting privacy note
