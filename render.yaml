@@ -70,5 +70,6 @@ services:
 databases:
   - name: organization-237-db
     plan: free
+    postgresMajorVersion: "16"
     databaseName: organization_237
     user: organization_237_user
