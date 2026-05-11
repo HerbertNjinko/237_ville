@@ -78,6 +78,7 @@
 
 - Use the root `render.yaml` Blueprint for the web service and Postgres database.
 - The Blueprint builds from the repository root, runs backend commands with `cd backend`, and keeps frontend changes eligible for auto-deploys.
+- The app checks and applies the schema migration during server startup, which keeps the free Render service compatible.
 - The Blueprint prompts for secret values marked `sync: false`, including the admin temporary password and SMTP credentials.
 - Do not upload `.env`. Use `backend/.env.example` only as a reference for required environment variables.
 - The backend serves the browser app from the sibling `frontend/` directory.

@@ -6,7 +6,6 @@ services:
     repo: https://github.com/HerbertNjinko/237_ville
     branch: dev
     buildCommand: cd backend && npm ci
-    preDeployCommand: cd backend && npm run migrate
     startCommand: cd backend && npm start
     healthCheckPath: /
     autoDeployTrigger: commit
