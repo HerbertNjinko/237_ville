@@ -88,10 +88,115 @@ export async function handleSocialRoutes(req, res, url, context) {
     listSocialCoordinator,
     getSocialFundRequest,
     socialTaskLabel,
+    socialAssignmentResponseDetails,
     buildSocialAnnouncementBody
   } = context;
   const method = req.method || "GET";
   const pathname = url.pathname;
+
+  async function publishEventAssignmentsFromResponse(assignment, user) {
+    if (!assignment.event_id) {
+      return null;
+    }
+
+    const eventResult = await query(
+      `
+        SELECT events.*, users.full_name AS author_name
+        FROM events
+        LEFT JOIN users ON users.id = events.created_by
+        WHERE events.id = $1
+        LIMIT 1
+      `,
+      [assignment.event_id]
+    );
+    const event = eventResult.rows[0];
+    if (!event || event.status !== "active") {
+      return null;
+    }
+
+    const assignmentsResult = await query(
+      `
+        SELECT social_assignments.*, users.full_name AS member_name, users.email AS member_email
+        FROM social_assignments
+        LEFT JOIN users ON users.id = social_assignments.user_id
+        WHERE social_assignments.event_id = $1
+          AND social_assignments.status <> 'archived'
+          AND social_assignments.archived_at IS NULL
+        ORDER BY task_type ASC, created_at ASC
+      `,
+      [assignment.event_id]
+    );
+    const assignments = assignmentsResult.rows.map(toSocialAssignment);
+    const title = `Event assignments: ${event.title}`;
+    const body = buildSocialEventAnnouncementBody(event, assignments);
+    const existingResult = await query(
+      `
+        SELECT *
+        FROM announcements
+        WHERE category = 'event_assignment'
+          AND title = $1
+        ORDER BY created_at DESC
+        LIMIT 1
+      `,
+      [title]
+    );
+
+    if (existingResult.rows.length) {
+      const { rows } = await query(
+        `
+          UPDATE announcements
+          SET body = $2,
+              status = 'published',
+              published_at = COALESCE(published_at, now()),
+              updated_at = now()
+          WHERE id = $1
+          RETURNING *
+        `,
+        [existingResult.rows[0].id, body]
+      );
+      await notifyActiveMembers(
+        "event_assignment_update",
+        title,
+        `${user.fullName} updated ${socialTaskLabel(assignment.task_type).toLowerCase()} details for ${event.title}.`,
+        `/announcements/${rows[0].id}`
+      );
+      return rows[0];
+    }
+
+    const { rows } = await query(
+      `
+        INSERT INTO announcements (title, body, category, status, created_by, published_at)
+        VALUES ($1, $2, 'event_assignment', 'published', $3, now())
+        RETURNING *
+      `,
+      [title, body, user.id]
+    );
+    await createAnnouncementNotifications(rows[0]);
+    return rows[0];
+  }
+
+  function buildSocialEventAnnouncementBody(event, assignments) {
+    const eventDate =
+      event.starts_at instanceof Date
+        ? event.starts_at.toISOString().slice(0, 10)
+        : String(event.starts_at || "").slice(0, 10);
+    const assignmentLines = assignments.length
+      ? assignments.map((assignment) => {
+          const group = assignment.groupName ? ` (${assignment.groupName})` : "";
+          const responseDetails = socialAssignmentResponseDetails(assignment);
+          return `- ${socialTaskLabel(assignment.taskType)}${group}: ${assignment.memberName || "Unassigned"}${responseDetails ? ` | ${responseDetails}` : ""}`;
+        })
+      : ["- No assignments have been added yet."];
+
+    return [
+      `${event.title} is scheduled for ${eventDate}.`,
+      event.location ? `Location: ${event.location}` : "",
+      event.description ? `Details: ${event.description}` : "",
+      "",
+      "Assignments:",
+      ...assignmentLines
+    ].filter((line) => line !== "").join("\n");
+  }
 
   if (method === "POST" && pathname === "/api/admin/social/meetings") {
     const admin = await requireStaffPermission(req, res, "social");
@@ -373,6 +478,8 @@ export async function handleSocialRoutes(req, res, url, context) {
       `${user.fullName} updated ${socialTaskLabel(assignment.task_type).toLowerCase()} details for ${assignment.event_title || assignment.meeting_title}.`,
       "/admin"
     );
+
+    await publishEventAssignmentsFromResponse(assignment, user);
 
     return sendJson(res, 200, {
       assignment: toSocialAssignment({ ...rows[0], member_name: user.fullName, member_email: user.email })

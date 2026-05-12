@@ -15,7 +15,14 @@ async function api(path, options = {}) {
   const payload = await response.json().catch(() => ({}));
 
   if (!response.ok) {
+    if (response.status === 401 && typeof handleUnauthorizedSession === "function") {
+      handleUnauthorizedSession();
+    }
     throw new Error(payload.error || "Request failed.");
+  }
+
+  if (typeof resetInactivityLogoutTimer === "function") {
+    resetInactivityLogoutTimer();
   }
 
   return payload;

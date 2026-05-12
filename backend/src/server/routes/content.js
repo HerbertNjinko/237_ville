@@ -128,6 +128,74 @@ export async function handleContentRoutes(req, res, url, context) {
     return sendJson(res, 201, { announcement: rows[0] });
   }
 
+  const announcementUpdateMatch = pathname.match(/^\/api\/admin\/announcements\/(\d+)$/);
+  if (method === "PATCH" && announcementUpdateMatch) {
+    const admin = await requireStaffPermission(req, res, "announcements");
+    if (!admin) return;
+    const announcementId = parseId(announcementUpdateMatch[1]);
+    const payload = await readJson(req);
+    requireFields(payload, ["title", "body"]);
+
+    const { rows: existingRows } = await query(
+      "SELECT * FROM announcements WHERE id = $1",
+      [announcementId]
+    );
+
+    if (existingRows.length === 0) {
+      return sendError(res, 404, "Announcement not found.");
+    }
+
+    const existing = existingRows[0];
+    const status = payload.status === "draft" ? "draft" : "published";
+    const wasPublished = existing.status === "published";
+    const isNowPublished = status === "published";
+
+    const { rows } = await query(
+      `
+        UPDATE announcements
+        SET title = $2,
+            body = $3,
+            category = $4,
+            status = $5,
+            published_at = CASE WHEN $5 = 'published' AND published_at IS NULL THEN now() ELSE published_at END,
+            updated_at = now()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [
+        announcementId,
+        String(payload.title).trim(),
+        String(payload.body).trim(),
+        String(payload.category || "announcement").trim(),
+        status
+      ]
+    );
+
+    if (isNowPublished && !wasPublished) {
+      await createAnnouncementNotifications(rows[0]);
+    }
+
+    return sendJson(res, 200, { announcement: rows[0] });
+  }
+
+  const announcementDeleteMatch = pathname.match(/^\/api\/admin\/announcements\/(\d+)$/);
+  if (method === "DELETE" && announcementDeleteMatch) {
+    const admin = await requireStaffPermission(req, res, "announcements");
+    if (!admin) return;
+    const announcementId = parseId(announcementDeleteMatch[1]);
+
+    const { rows } = await query(
+      "DELETE FROM announcements WHERE id = $1 RETURNING id",
+      [announcementId]
+    );
+
+    if (rows.length === 0) {
+      return sendError(res, 404, "Announcement not found.");
+    }
+
+    return sendNoContent(res, 204);
+  }
+
   if (method === "GET" && pathname === "/api/events") {
     const user = await requireActiveUser(req, res);
     if (!user) return;

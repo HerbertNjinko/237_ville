@@ -431,20 +431,55 @@ async function getCurrentUser(req) {
     return null;
   }
 
-  const { rows } = await query(
+  const tokenHash = hashSessionToken(token);
+  const inactivityThresholdSeconds = 5 * 60;
+
+  // Check for session and inactivity
+  const { rows: sessionRows } = await query(
+    `
+      SELECT id, user_id, last_activity_at
+      FROM sessions
+      WHERE token_hash = $1
+        AND expires_at > now()
+      LIMIT 1
+    `,
+    [tokenHash]
+  );
+
+  if (sessionRows.length === 0) {
+    return null;
+  }
+
+  const session = sessionRows[0];
+  const lastActivityAt = new Date(session.last_activity_at);
+  const now = new Date();
+  const inactiveForSeconds = (now - lastActivityAt) / 1000;
+
+  // If inactive for more than 5 minutes, invalidate session
+  if (inactiveForSeconds > inactivityThresholdSeconds) {
+    await query("DELETE FROM sessions WHERE id = $1", [session.id]);
+    return null;
+  }
+
+  // Update last activity time for this session
+  await query(
+    "UPDATE sessions SET last_activity_at = now() WHERE id = $1",
+    [session.id]
+  );
+
+  // Get user data
+  const { rows: userRows } = await query(
     `
       SELECT users.*
-      FROM sessions
-      JOIN users ON users.id = sessions.user_id
-      WHERE sessions.token_hash = $1
-        AND sessions.expires_at > now()
+      FROM users
+      WHERE users.id = $1
         AND users.membership_status NOT IN ('inactive', 'suspended')
       LIMIT 1
     `,
-    [hashSessionToken(token)]
+    [session.user_id]
   );
 
-  return toUser(rows[0]);
+  return toUser(userRows[0]);
 }
 
 async function requireUser(req, res) {
@@ -559,6 +594,7 @@ async function listAnnouncements(limit = 30) {
       FROM announcements
       LEFT JOIN users ON users.id = announcements.created_by
       WHERE announcements.status = 'published'
+        AND announcements.category != 'social'
       ORDER BY announcements.published_at DESC NULLS LAST, announcements.created_at DESC
       LIMIT $1
     `,
@@ -1915,7 +1951,13 @@ async function listSocialCoordinator(user, { includeAll = false } = {}) {
         [user.id]
       );
 
-  const assignments = assignmentsResult.rows.map(toSocialAssignment);
+  const assignments = assignmentsResult.rows.map((row) => {
+    const assignment = toSocialAssignment(row);
+    if (!includeAll && Number(assignment.userId) !== Number(user.id)) {
+      assignment.note = "";
+    }
+    return assignment;
+  });
   const requests = requestsResult.rows.map(toSocialResourceRequest);
   const fundRequests = fundRequestsResult.rows.map(toSocialFundRequest);
 
@@ -2000,6 +2042,14 @@ function socialAssignmentResponseDetails(assignment) {
   return details.join("; ");
 }
 
+function socialDateLabel(value) {
+  if (!value) return "";
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  const parsed = new Date(value);
+  if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
+  return String(value).slice(0, 10);
+}
+
 function buildSocialAnnouncementBody(meeting, assignments, requests) {
   const assignmentLines = assignments.length
     ? assignments.map((assignment) => {
@@ -2007,9 +2057,8 @@ function buildSocialAnnouncementBody(meeting, assignments, requests) {
         const groupName = assignment.groupName || assignment.group_name;
         const group = groupName ? ` (${groupName})` : "";
         const name = assignment.memberName || assignment.member_name || "Unassigned";
-        const note = assignment.note ? ` - ${assignment.note}` : "";
         const responseDetails = socialAssignmentResponseDetails(assignment);
-        return `- ${socialTaskLabel(taskType)}${group}: ${name}${note}${responseDetails ? ` | ${responseDetails}` : ""}`;
+        return `- ${socialTaskLabel(taskType)}${group}: ${name}${responseDetails ? ` | ${responseDetails}` : ""}`;
       })
     : ["- No assignments have been added yet."];
 
@@ -2026,7 +2075,7 @@ function buildSocialAnnouncementBody(meeting, assignments, requests) {
     : ["- No approved resource requests yet."];
 
   return [
-    `${meeting.title} is scheduled for ${meeting.meeting_date}.`,
+    `${meeting.title} is scheduled for ${socialDateLabel(meeting.meeting_date || meeting.meetingDate)}.`,
     meeting.location ? `Location: ${meeting.location}` : "",
     meeting.notes ? `Notes: ${meeting.notes}` : "",
     "",
@@ -2133,6 +2182,7 @@ const routeContext = {
   listSocialCoordinator,
   getSocialFundRequest,
   socialTaskLabel,
+  socialAssignmentResponseDetails,
   buildSocialAnnouncementBody
 };
 

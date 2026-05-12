@@ -11,7 +11,7 @@ function renderAdminAnnouncements() {
             <p>Review what has been sent to members.</p>
           </div>
         </div>
-        ${renderAnnouncementList(state.admin.announcements || [])}
+        ${renderAdminAnnouncementList(state.admin.announcements || [])}
       </div>
       <aside class="panel">
         <div class="panel-header">
@@ -23,6 +23,52 @@ function renderAdminAnnouncements() {
         ${renderAnnouncementForm()}
       </aside>
     </section>
+  `;
+}
+
+function renderAdminAnnouncementList(announcements) {
+  if (!announcements.length) return emptyState("No announcements have been published.");
+
+  return `
+    <div class="item-list">
+      ${announcements
+        .map(
+          (announcement) => `
+            <article class="item-card" id="announcement-${announcement.id}">
+              <form class="form-stack announcement-edit-form" data-action="update-announcement" data-announcement-id="${announcement.id}">
+                <label class="field">
+                  <span>Title</span>
+                  <input name="title" value="${escapeHtml(announcement.title)}" required>
+                </label>
+                <label class="field">
+                  <span>Category</span>
+                  <select name="category">
+                    <option value="announcement" ${announcement.category === 'announcement' ? 'selected' : ''}>Announcement</option>
+                    <option value="article" ${announcement.category === 'article' ? 'selected' : ''}>Article</option>
+                    <option value="board_update" ${announcement.category === 'board_update' ? 'selected' : ''}>Board update</option>
+                    <option value="event_assignment" ${announcement.category === 'event_assignment' ? 'selected' : ''}>Event assignment</option>
+                    <option value="social" ${announcement.category === 'social' ? 'selected' : ''}>Monthly social meeting</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Body</span>
+                  <textarea name="body" required>${escapeHtml(announcement.body)}</textarea>
+                </label>
+                <div class="item-meta">
+                  <span>${escapeHtml(announcement.category)}</span>
+                  <span>${escapeHtml(announcement.authorName)}</span>
+                  <span>${formatDate(announcement.publishedAt || announcement.createdAt)}</span>
+                </div>
+                <div class="actions">
+                  <button class="primary-button" type="submit">Save changes</button>
+                  <button class="secondary-button" data-click="delete-announcement" data-announcement-id="${announcement.id}" type="button">Delete</button>
+                </div>
+              </form>
+            </article>
+          `
+        )
+        .join("")}
+    </div>
   `;
 }
 
@@ -39,6 +85,7 @@ function renderAnnouncementForm() {
           <option value="announcement">Announcement</option>
           <option value="article">Article</option>
           <option value="board_update">Board update</option>
+          <option value="event_assignment">Event assignment</option>
         </select>
       </label>
       <label class="field">

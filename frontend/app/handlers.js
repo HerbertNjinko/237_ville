@@ -327,6 +327,17 @@ async function handleSubmit(event) {
       return;
     }
 
+    if (action === "update-announcement") {
+      await api(`/api/admin/announcements/${form.dataset.announcementId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ ...payload, status: "published" })
+      });
+      state.message = "Announcement updated.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
     if (action === "create-event") {
       await api("/api/admin/events", {
         method: "POST",
@@ -762,6 +773,9 @@ async function handleClick(event) {
       state.portalMode = "member";
       state.sidebarOpen = true;
       state.authMode = "home";
+      if (typeof clearInactivityLogoutTimer === "function") {
+        clearInactivityLogoutTimer();
+      }
       await loadPublicPaymentDetails();
       await loadPublicAbout();
       state.message = "";
@@ -1016,6 +1030,19 @@ async function handleClick(event) {
         body: "{}"
       });
       state.message = "Event archived.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
+    if (action === "delete-announcement") {
+      if (!confirm("Are you sure you want to delete this announcement? This cannot be undone.")) {
+        return;
+      }
+      await api(`/api/admin/announcements/${button.dataset.announcementId}`, {
+        method: "DELETE"
+      });
+      state.message = "Announcement deleted.";
       state.messageType = "ok";
       await refreshAll({ includeAdmin: true });
       return;

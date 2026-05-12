@@ -968,7 +968,7 @@ function renderSocialAssignmentSummary(assignments) {
           (assignment) => `
             <div class="comment">
               <strong>${escapeHtml(socialTaskLabel(assignment.taskType))}</strong>
-              <p>${escapeHtml(assignment.memberName || "Unassigned")}${assignment.groupName ? ` · ${escapeHtml(assignment.groupName)}` : ""}${assignment.note ? ` · ${escapeHtml(assignment.note)}` : ""}</p>
+              <p>${escapeHtml(assignment.memberName || "Unassigned")}${assignment.groupName ? ` · ${escapeHtml(assignment.groupName)}` : ""}</p>
               ${renderSocialAssignmentResponseDetails(assignment)}
             </div>
           `
