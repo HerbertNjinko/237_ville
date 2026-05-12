@@ -2173,7 +2173,7 @@ async function updateEventAssignmentAnnouncement(eventId, options = {}) {
     return rows[0];
   }
 
-  if (!options.createIfMissing || (!hasMemberResponse && !shouldPublishCancellation)) return null;
+  if (!options.createIfMissing || (!assignments.length && !hasMemberResponse && !shouldPublishCancellation)) return null;
 
   const { rows } = await query(
     `

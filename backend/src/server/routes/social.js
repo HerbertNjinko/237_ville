@@ -296,7 +296,7 @@ export async function handleSocialRoutes(req, res, url, context) {
     }
 
     if (eventId) {
-      await updateEventAssignmentAnnouncement(eventId, { createIfMissing: false });
+      await updateEventAssignmentAnnouncement(eventId, { createIfMissing: true, actor: admin });
     } else if (meetingId) {
       await updateSocialMeetingAnnouncement(meetingId);
     }
@@ -355,7 +355,7 @@ export async function handleSocialRoutes(req, res, url, context) {
     }
 
     if (rows[0].event_id) {
-      await updateEventAssignmentAnnouncement(rows[0].event_id, { createIfMissing: false });
+      await updateEventAssignmentAnnouncement(rows[0].event_id, { createIfMissing: true, actor: admin });
     } else if (rows[0].meeting_id) {
       await updateSocialMeetingAnnouncement(rows[0].meeting_id);
     }
