@@ -1035,6 +1035,20 @@ async function handleClick(event) {
       return;
     }
 
+    if (action === "event-cancel") {
+      if (!confirm("Cancel this event and all assigned tasks? Members will be notified.")) {
+        return;
+      }
+      await api(`/api/admin/events/${button.dataset.eventId}/cancel`, {
+        method: "POST",
+        body: "{}"
+      });
+      state.message = "Event cancelled and members notified.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
     if (action === "delete-announcement") {
       if (!confirm("Are you sure you want to delete this announcement? This cannot be undone.")) {
         return;
@@ -1054,6 +1068,20 @@ async function handleClick(event) {
         body: "{}"
       });
       state.message = "Social meeting assignments published as an announcement.";
+      state.messageType = "ok";
+      await refreshAll({ includeAdmin: true });
+      return;
+    }
+
+    if (action === "cancel-social-meeting") {
+      if (!confirm("Cancel this monthly social meeting and all assigned tasks? Members will be notified.")) {
+        return;
+      }
+      await api(`/api/admin/social/meetings/${button.dataset.meetingId}/cancel`, {
+        method: "POST",
+        body: "{}"
+      });
+      state.message = "Monthly social meeting cancelled and members notified.";
       state.messageType = "ok";
       await refreshAll({ includeAdmin: true });
       return;

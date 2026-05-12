@@ -2051,6 +2051,7 @@ function socialDateLabel(value) {
 }
 
 function buildSocialAnnouncementBody(meeting, assignments, requests) {
+  const isCancelled = meeting.status === "cancelled";
   const assignmentLines = assignments.length
     ? assignments.map((assignment) => {
         const taskType = assignment.taskType || assignment.task_type;
@@ -2075,6 +2076,7 @@ function buildSocialAnnouncementBody(meeting, assignments, requests) {
     : ["- No approved resource requests yet."];
 
   return [
+    isCancelled ? `${meeting.title} has been cancelled.` : "",
     `${meeting.title} is scheduled for ${socialDateLabel(meeting.meeting_date || meeting.meetingDate)}.`,
     meeting.location ? `Location: ${meeting.location}` : "",
     meeting.notes ? `Notes: ${meeting.notes}` : "",
@@ -2085,6 +2087,154 @@ function buildSocialAnnouncementBody(meeting, assignments, requests) {
     "Approved resource requests:",
     ...requestLines
   ].filter((line) => line !== "").join("\n");
+}
+
+function buildSocialEventAnnouncementBody(event, assignments) {
+  const isCancelled = event.status === "cancelled";
+  const assignmentLines = assignments.length
+    ? assignments.map((assignment) => {
+        const taskType = assignment.taskType || assignment.task_type;
+        const groupName = assignment.groupName || assignment.group_name;
+        const group = groupName ? ` (${groupName})` : "";
+        const name = assignment.memberName || assignment.member_name || "Unassigned";
+        const responseDetails = socialAssignmentResponseDetails(assignment);
+        return `- ${socialTaskLabel(taskType)}${group}: ${name}${responseDetails ? ` | ${responseDetails}` : ""}`;
+      })
+    : ["- No assignments have been added yet."];
+
+  return [
+    isCancelled ? `${event.title} has been cancelled.` : "",
+    `${event.title} is scheduled for ${socialDateLabel(event.starts_at || event.startsAt)}.`,
+    event.location ? `Location: ${event.location}` : "",
+    event.description ? `Details: ${event.description}` : "",
+    "",
+    "Assignments:",
+    ...assignmentLines
+  ].filter((line) => line !== "").join("\n");
+}
+
+async function updateEventAssignmentAnnouncement(eventId, options = {}) {
+  const eventResult = await query("SELECT * FROM events WHERE id = $1 LIMIT 1", [eventId]);
+  const event = eventResult.rows[0];
+  if (!event || !["active", "cancelled"].includes(event.status)) return null;
+
+  const assignmentsResult = await query(
+    `
+      SELECT social_assignments.*, users.full_name AS member_name, users.email AS member_email
+      FROM social_assignments
+      LEFT JOIN users ON users.id = social_assignments.user_id
+      WHERE social_assignments.event_id = $1
+        AND social_assignments.status <> 'archived'
+        AND social_assignments.archived_at IS NULL
+      ORDER BY task_type ASC, created_at ASC
+    `,
+    [eventId]
+  );
+  const assignments = assignmentsResult.rows.map(toSocialAssignment);
+  const hasMemberResponse = assignments.some((assignment) => assignment.respondedAt);
+  const shouldPublishCancellation = event.status === "cancelled" && assignments.length > 0;
+  const currentTitle = `Event assignments: ${event.title}`;
+  const previousTitle = options.previousTitle
+    ? String(options.previousTitle).startsWith("Event assignments: ")
+      ? String(options.previousTitle)
+      : `Event assignments: ${options.previousTitle}`
+    : currentTitle;
+  const body = buildSocialEventAnnouncementBody(event, assignments);
+
+  const existingResult = await query(
+    `
+      SELECT *
+      FROM announcements
+      WHERE category = 'event_assignment'
+        AND (title = $1 OR title = $2)
+      ORDER BY created_at DESC
+      LIMIT 1
+    `,
+    [currentTitle, previousTitle]
+  );
+
+  if (existingResult.rows.length) {
+    const { rows } = await query(
+      `
+        UPDATE announcements
+        SET title = $2,
+            body = $3,
+            status = 'published',
+            published_at = COALESCE(published_at, now()),
+            updated_at = now()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [existingResult.rows[0].id, currentTitle, body]
+    );
+    if (options.notify && options.notificationBody) {
+      await notifyActiveMembers("event_assignment_update", currentTitle, options.notificationBody, `/announcements/${rows[0].id}`);
+    }
+    return rows[0];
+  }
+
+  if (!options.createIfMissing || (!hasMemberResponse && !shouldPublishCancellation)) return null;
+
+  const { rows } = await query(
+    `
+      INSERT INTO announcements (title, body, category, status, created_by, published_at)
+      VALUES ($1, $2, 'event_assignment', 'published', $3, now())
+      RETURNING *
+    `,
+    [currentTitle, body, options.actor?.id || null]
+  );
+  await createAnnouncementNotifications(rows[0]);
+  return rows[0];
+}
+
+async function updateSocialMeetingAnnouncement(meetingId) {
+  const meetingResult = await query("SELECT * FROM social_meetings WHERE id = $1 LIMIT 1", [meetingId]);
+  const meeting = meetingResult.rows[0];
+  if (!meeting || !meeting.announcement_id) return null;
+
+  const assignmentsResult = await query(
+    `
+      SELECT social_assignments.*, users.full_name AS member_name, users.email AS member_email
+      FROM social_assignments
+      LEFT JOIN users ON users.id = social_assignments.user_id
+      WHERE social_assignments.meeting_id = $1
+      ORDER BY task_type ASC, created_at ASC
+    `,
+    [meetingId]
+  );
+  const requestsResult = await query(
+    `
+      SELECT social_resource_requests.*,
+             social_resources.name AS resource_name,
+             users.full_name AS requester_name,
+             users.email AS requester_email
+      FROM social_resource_requests
+      JOIN social_resources ON social_resources.id = social_resource_requests.resource_id
+      JOIN users ON users.id = social_resource_requests.requested_by
+      WHERE social_resource_requests.meeting_id = $1
+      ORDER BY social_resource_requests.created_at ASC
+    `,
+    [meetingId]
+  );
+  const body = buildSocialAnnouncementBody(
+    meeting,
+    assignmentsResult.rows.map(toSocialAssignment),
+    requestsResult.rows.map(toSocialResourceRequest)
+  );
+  const { rows } = await query(
+    `
+      UPDATE announcements
+      SET title = $2,
+          body = $3,
+          status = 'published',
+          published_at = COALESCE(published_at, now()),
+          updated_at = now()
+      WHERE id = $1
+      RETURNING *
+    `,
+    [meeting.announcement_id, `Social coordinator schedule: ${meeting.title}`, body]
+  );
+  return rows[0] || null;
 }
 
 const routeContext = {
@@ -2183,7 +2333,9 @@ const routeContext = {
   getSocialFundRequest,
   socialTaskLabel,
   socialAssignmentResponseDetails,
-  buildSocialAnnouncementBody
+  buildSocialAnnouncementBody,
+  updateEventAssignmentAnnouncement,
+  updateSocialMeetingAnnouncement
 };
 
 const apiRouteHandlers = [

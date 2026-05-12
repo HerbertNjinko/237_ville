@@ -88,7 +88,8 @@ export async function handleContentRoutes(req, res, url, context) {
     listSocialCoordinator,
     getSocialFundRequest,
     socialTaskLabel,
-    buildSocialAnnouncementBody
+    buildSocialAnnouncementBody,
+    updateEventAssignmentAnnouncement
   } = context;
   const method = req.method || "GET";
   const pathname = url.pathname;
@@ -234,6 +235,8 @@ export async function handleContentRoutes(req, res, url, context) {
     const eventId = parseId(eventUpdateMatch[1]);
     const payload = await readJson(req);
     requireFields(payload, ["title", "startsAt"]);
+    const existingEvent = await query("SELECT title FROM events WHERE id = $1 LIMIT 1", [eventId]);
+    const previousTitle = existingEvent.rows[0]?.title || "";
 
     const { rows } = await query(
       `
@@ -261,6 +264,21 @@ export async function handleContentRoutes(req, res, url, context) {
       return sendError(res, 404, "Event not found.");
     }
 
+    const announcement = await updateEventAssignmentAnnouncement(eventId, {
+      previousTitle,
+      createIfMissing: false,
+      notify: true,
+      notificationBody: `${rows[0].title} event details were updated. Please review the latest event assignment details.`
+    });
+    if (!announcement) {
+      await notifyActiveMembers(
+        "event_update",
+        `Event updated: ${rows[0].title}`,
+        `${rows[0].title} event details were updated.`,
+        "/events"
+      );
+    }
+
     return sendJson(res, 200, { event: rows[0] });
   }
 
@@ -286,6 +304,53 @@ export async function handleContentRoutes(req, res, url, context) {
     }
 
     return sendJson(res, 200, { event: rows[0] });
+  }
+
+  const eventCancelMatch = pathname.match(/^\/api\/admin\/events\/(\d+)\/cancel$/);
+  if (method === "POST" && eventCancelMatch) {
+    const admin = await requireStaffPermission(req, res, "events");
+    if (!admin) return;
+    const eventId = parseId(eventCancelMatch[1]);
+    const eventResult = await query("SELECT * FROM events WHERE id = $1 LIMIT 1", [eventId]);
+    const event = eventResult.rows[0];
+    if (!event) {
+      return sendError(res, 404, "Event not found.");
+    }
+
+    const { rows } = await query(
+      `
+        UPDATE events
+        SET status = 'cancelled',
+            updated_at = now()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [eventId]
+    );
+
+    await query(
+      `
+        UPDATE social_assignments
+        SET status = 'cancelled',
+            updated_at = now()
+        WHERE event_id = $1
+          AND status IN ('assigned', 'completed')
+      `,
+      [eventId]
+    );
+
+    const announcement = await updateEventAssignmentAnnouncement(eventId, {
+      previousTitle: event.title,
+      createIfMissing: true
+    });
+    await notifyActiveMembers(
+      "event_cancelled",
+      `Event cancelled: ${rows[0].title}`,
+      `${rows[0].title} has been cancelled. Assigned event tasks are cancelled.`,
+      announcement ? `/announcements/${announcement.id}` : "/announcements"
+    );
+
+    return sendJson(res, 200, { event: rows[0], announcement });
   }
 
   if (method === "POST" && pathname === "/api/questions") {

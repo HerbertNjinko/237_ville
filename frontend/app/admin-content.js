@@ -217,8 +217,11 @@ function renderAdminEventManager(events) {
                   ${
                     event.status === "archived"
                       ? `<span class="muted">Archived ${formatDate(event.archivedAt)}</span>`
+                      : event.status === "cancelled"
+                        ? `<span class="muted">Cancelled</span>`
                       : isFullAdmin()
-                        ? `<button class="secondary-button" data-click="event-archive" data-event-id="${event.id}" type="button">Archive</button>`
+                        ? `<button class="secondary-button" data-click="event-cancel" data-event-id="${event.id}" type="button">Cancel event</button>
+                           <button class="secondary-button" data-click="event-archive" data-event-id="${event.id}" type="button">Archive</button>`
                         : ""
                   }
                 </div>

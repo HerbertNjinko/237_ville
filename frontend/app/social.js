@@ -462,7 +462,12 @@ function renderAdminSocialMeetingCard(meeting) {
         </label>
         <div class="actions">
           <button class="primary-button" type="submit">Save meeting</button>
-          <button class="secondary-button" data-click="publish-social-meeting" data-meeting-id="${meeting.id}" type="button">Publish as announcement</button>
+          ${
+            meeting.status === "cancelled"
+              ? `<span class="muted">Cancelled</span>`
+              : `<button class="secondary-button" data-click="publish-social-meeting" data-meeting-id="${meeting.id}" type="button">Publish as announcement</button>
+                 <button class="secondary-button" data-click="cancel-social-meeting" data-meeting-id="${meeting.id}" type="button">Cancel meeting</button>`
+          }
         </div>
       </form>
       <div class="social-subsection">

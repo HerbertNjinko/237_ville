@@ -196,7 +196,7 @@ CREATE TABLE IF NOT EXISTS events (
   location TEXT DEFAULT '',
   starts_at TIMESTAMPTZ NOT NULL,
   ends_at TIMESTAMPTZ,
-  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived')),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived', 'cancelled')),
   archived_at TIMESTAMPTZ,
   created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -206,7 +206,7 @@ CREATE TABLE IF NOT EXISTS events (
 ALTER TABLE events ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
 ALTER TABLE events ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
 ALTER TABLE events DROP CONSTRAINT IF EXISTS events_status_check;
-ALTER TABLE events ADD CONSTRAINT events_status_check CHECK (status IN ('active', 'archived'));
+ALTER TABLE events ADD CONSTRAINT events_status_check CHECK (status IN ('active', 'archived', 'cancelled'));
 
 CREATE TABLE IF NOT EXISTS member_questions (
   id BIGSERIAL PRIMARY KEY,
